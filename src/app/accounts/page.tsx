@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -9,7 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogFooter,
+  DialogFooter as DialogModalFooter, // Renamed to avoid conflict if CardFooter was also named DialogFooter
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -110,9 +110,9 @@ export default function AccountsPage() {
               <BankItem name="Discover" iconUrl="https://placehold.co/64x64.png" dataAiHint="Discover logo" onSelect={() => isReady && openPlaidLink('discover')} />
               {/* Add more banks or a search input here */}
             </div>
-             <DialogFooter>
+             <DialogModalFooter>
                 <Button variant="outline" onClick={() => setIsLinkingBank(false)}>Cancel</Button>
-            </DialogFooter>
+            </DialogModalFooter>
           </DialogContent>
         </Dialog>
       </div>
