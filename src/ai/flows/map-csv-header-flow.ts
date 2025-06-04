@@ -10,16 +10,7 @@
 
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
-
-// Define the fields your application requires for a transaction
-export const REQUIRED_TRANSACTION_FIELDS = [
-  'Date',
-  'Description',
-  'Amount',
-  'Type', // Expected values: "income" or "expense"
-  'Category',
-  'Account Name',
-] as const;
+import { REQUIRED_TRANSACTION_FIELDS } from '@/lib/constants';
 
 // Dynamically create the Zod schema for the output based on REQUIRED_TRANSACTION_FIELDS
 const fieldMappingProperties = REQUIRED_TRANSACTION_FIELDS.reduce(
@@ -78,8 +69,7 @@ const mapCsvHeaderFlow = ai.defineFlow(
     outputSchema: MapCsvHeaderOutputSchema,
   },
   async input => {
-    // Ensure the requiredFields in the input match the ones used for the output schema definition
-    // This is a safeguard, though typically the caller would use the exported REQUIRED_TRANSACTION_FIELDS
+    // Ensure the requiredFields in the input for the prompt matches the canonical ones used for the output schema definition
     const consistentInput = {
         ...input,
         requiredFields: [...REQUIRED_TRANSACTION_FIELDS] // Use the canonical list for the prompt
