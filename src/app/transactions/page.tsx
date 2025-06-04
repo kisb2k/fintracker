@@ -66,7 +66,7 @@ import { identifyTaxDeductions } from '@/ai/flows/identify-tax-deductions.ts';
 import { mapCsvHeader, type MapCsvHeaderOutput } from '@/ai/flows/map-csv-header-flow';
 import { REQUIRED_TRANSACTION_FIELDS } from '@/lib/constants';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge';
+import { Badge } from '@/components/ui/badge';
 import { useToast } from "@/hooks/use-toast";
 import { 
   getAccounts, 
@@ -1032,3 +1032,5 @@ export default function TransactionsPage() {
     </div>
   );
 }
+
+    
