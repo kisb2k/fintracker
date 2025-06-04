@@ -1,14 +1,15 @@
+
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DollarSign, TrendingUp, TrendingDown, ListChecks, Info } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { mockAccounts, mockTransactions, mockBudgets } from "@/lib/mock-data";
-import type { Transaction } from "@/lib/types";
-import { format } from 'date-fns';
+// import { mockAccounts, mockTransactions, mockBudgets } from "@/lib/mock-data";
+import type { Transaction, Account } from "@/lib/types";
+import { format, parseISO, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -22,12 +23,14 @@ import {
 import { detectUnusualSpending } from '@/ai/flows/detect-unusual-spending';
 import type { DetectUnusualSpendingOutput } from '@/ai/flows/detect-unusual-spending';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { getAccounts, getTransactions } from '@/lib/actions';
 
-const SpendingChart = () => {
+const SpendingChart: React.FC<{ transactions: Transaction[] }> = ({ transactions }) => {
   const [chartData, setChartData] = useState<any[]>([]);
 
   useEffect(() => {
-    const spendingByCategory = mockTransactions
+    if (!transactions) return;
+    const spendingByCategory = transactions
       .filter(t => t.amount < 0)
       .reduce((acc, transaction) => {
         const category = transaction.category || 'Uncategorized';
@@ -40,7 +43,7 @@ const SpendingChart = () => {
       Spending: parseFloat(value.toFixed(2)),
     }));
     setChartData(formattedData);
-  }, []);
+  }, [transactions]);
   
   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82Ca9D'];
 
@@ -74,13 +77,15 @@ const SpendingChart = () => {
 };
 
 
-const RecentTransactions = () => {
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
+const RecentTransactions: React.FC<{ transactions: Transaction[] }> = ({ transactions }) => {
+  const [recentTransactions, setRecentTransactions] = useState<Transaction[]>([]);
   useEffect(() => {
-    setTransactions(mockTransactions.slice(0, 5));
-  }, []);
+    if (transactions) {
+      setRecentTransactions(transactions.slice(0, 5));
+    }
+  }, [transactions]);
 
-  if(transactions.length === 0) {
+  if(recentTransactions.length === 0) {
     return <p className="text-muted-foreground">No recent transactions.</p>;
   }
 
@@ -95,9 +100,9 @@ const RecentTransactions = () => {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {transactions.map((transaction) => (
+        {recentTransactions.map((transaction) => (
           <TableRow key={transaction.id}>
-            <TableCell>{format(new Date(transaction.date), 'MMM dd, yyyy')}</TableCell>
+            <TableCell>{format(parseISO(transaction.date), 'MMM dd, yyyy')}</TableCell>
             <TableCell>{transaction.description}</TableCell>
             <TableCell><Badge variant="secondary">{transaction.category}</Badge></TableCell>
             <TableCell className={`text-right ${transaction.amount > 0 ? 'text-green-600' : 'text-red-600'}`}>
@@ -111,21 +116,26 @@ const RecentTransactions = () => {
 };
 
 
-const UnusualSpendingAlert: React.FC = () => {
+const UnusualSpendingAlert: React.FC<{ transactions: Transaction[], accounts: Account[] }> = ({ transactions, accounts }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [aiResult, setAiResult] = useState<DetectUnusualSpendingOutput | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleDetectUnusualSpending = async () => {
+    if (transactions.length === 0 || accounts.length === 0) {
+      setError("Not enough data to analyze spending. Please add transactions and accounts.");
+      return;
+    }
     setIsLoading(true);
     setError(null);
     setAiResult(null);
     try {
+      // Use the first account for simplicity in this example, or implement account selection
+      const firstAccount = accounts[0];
       const result = await detectUnusualSpending({
-        transactionHistory: JSON.stringify(mockTransactions),
-        // Pick first account for simplicity
-        accountId: mockAccounts[0]?.id || 'N/A',
-        accountType: mockAccounts[0]?.type || 'N/A',
+        transactionHistory: JSON.stringify(transactions),
+        accountId: firstAccount?.id || 'N/A',
+        accountType: firstAccount?.type || 'N/A',
       });
       setAiResult(result);
     } catch (e) {
@@ -142,7 +152,7 @@ const UnusualSpendingAlert: React.FC = () => {
         <Info className="h-4 w-4 text-muted-foreground" />
       </CardHeader>
       <CardContent>
-        <Button onClick={handleDetectUnusualSpending} disabled={isLoading} className="mb-4">
+        <Button onClick={handleDetectUnusualSpending} disabled={isLoading || transactions.length === 0} className="mb-4">
           {isLoading ? "Analyzing..." : "Check for Unusual Spending"}
         </Button>
         {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
@@ -164,33 +174,58 @@ const UnusualSpendingAlert: React.FC = () => {
 
 
 export default function DashboardPage() {
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
   const [totalBalance, setTotalBalance] = useState(0);
   const [monthlyIncome, setMonthlyIncome] = useState(0);
   const [monthlyExpenses, setMonthlyExpenses] = useState(0);
 
-  useEffect(() => {
-    const currentMonth = new Date().getMonth();
-    const currentYear = new Date().getFullYear();
+  const fetchData = useCallback(async () => {
+    setIsLoading(true);
+    const [dbAccounts, dbTransactions] = await Promise.all([
+      getAccounts(),
+      getTransactions()
+    ]);
+    setAccounts(dbAccounts);
+    setTransactions(dbTransactions);
+    setIsLoading(false);
+  }, []);
 
-    const balance = mockAccounts.reduce((sum, acc) => sum + acc.balance, 0);
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  useEffect(() => {
+    if (isLoading) return;
+
+    const currentMonthStart = startOfMonth(new Date());
+    const currentMonthEnd = endOfMonth(new Date());
+
+    const balance = accounts.reduce((sum, acc) => sum + acc.balance, 0);
     setTotalBalance(balance);
     
-    const income = mockTransactions
+    const income = transactions
       .filter(t => {
-        const tDate = new Date(t.date);
-        return t.amount > 0 && tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
+        const tDate = parseISO(t.date);
+        return t.amount > 0 && isWithinInterval(tDate, { start: currentMonthStart, end: currentMonthEnd });
       })
       .reduce((sum, t) => sum + t.amount, 0);
     setMonthlyIncome(income);
 
-    const expenses = mockTransactions
+    const expenses = transactions
       .filter(t => {
-        const tDate = new Date(t.date);
-        return t.amount < 0 && tDate.getMonth() === currentMonth && tDate.getFullYear() === currentYear;
+        const tDate = parseISO(t.date);
+        return t.amount < 0 && isWithinInterval(tDate, { start: currentMonthStart, end: currentMonthEnd });
       })
       .reduce((sum, t) => sum + Math.abs(t.amount), 0);
     setMonthlyExpenses(expenses);
-  }, []);
+  }, [accounts, transactions, isLoading]);
+
+  if (isLoading) {
+    return <div className="flex justify-center items-center h-64"><p>Loading dashboard data...</p></div>;
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -202,7 +237,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">${totalBalance.toFixed(2)}</div>
-            <p className="text-xs text-muted-foreground">Across all accounts</p>
+            <p className="text-xs text-muted-foreground">Across all accounts from DB</p>
           </CardContent>
         </Card>
         <Card>
@@ -212,7 +247,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600">+${monthlyIncome.toFixed(2)}</div>
-            <p className="text-xs text-muted-foreground">This month</p>
+            <p className="text-xs text-muted-foreground">This month (from DB)</p>
           </CardContent>
         </Card>
         <Card>
@@ -222,7 +257,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-red-600">-${monthlyExpenses.toFixed(2)}</div>
-            <p className="text-xs text-muted-foreground">This month</p>
+            <p className="text-xs text-muted-foreground">This month (from DB)</p>
           </CardContent>
         </Card>
       </div>
@@ -233,10 +268,10 @@ export default function DashboardPage() {
             <CardTitle>Spending by Category</CardTitle>
           </CardHeader>
           <CardContent>
-            <SpendingChart />
+            <SpendingChart transactions={transactions} />
           </CardContent>
         </Card>
-        <UnusualSpendingAlert />
+        <UnusualSpendingAlert transactions={transactions} accounts={accounts} />
       </div>
       
       <Card>
@@ -245,7 +280,7 @@ export default function DashboardPage() {
           <ListChecks className="h-5 w-5 text-muted-foreground" />
         </CardHeader>
         <CardContent>
-          <RecentTransactions />
+          <RecentTransactions transactions={transactions} />
         </CardContent>
       </Card>
     </div>

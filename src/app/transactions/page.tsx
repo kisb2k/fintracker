@@ -7,7 +7,8 @@ import { ArrowUpDown, Eye, Sparkles, UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DataTable } from "@/components/ui/data-table";
-import { mockTransactions as initialMockTransactions, transactionCategories as allCategories, mockAccounts as initialMockAccounts } from "@/lib/mock-data";
+// import { mockTransactions as initialMockTransactions, transactionCategories as allCategories, mockAccounts as initialMockAccounts } from '@/lib/mock-data';
+import { transactionCategories as allCategories } from '@/lib/mock-data';
 import type { Transaction, Account, CategorizedTransaction, TaxDeductionInfo } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -47,6 +48,15 @@ import { REQUIRED_TRANSACTION_FIELDS } from '@/lib/constants';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from '@/components/ui/badge';
 import { useToast } from "@/hooks/use-toast";
+import { 
+  getAccounts, 
+  addAccount, 
+  getTransactions, 
+  addTransaction, 
+  addTransactionsBatch,
+  recalculateAndUpdateAccountBalance,
+  recalculateAllAccountBalances
+} from '@/lib/actions';
 
 const transactionFormSchema = z.object({
   description: z.string().min(1, "Description is required"),
@@ -60,9 +70,9 @@ const transactionFormSchema = z.object({
 type TransactionFormData = z.infer<typeof transactionFormSchema>;
 
 const AddTransactionForm: React.FC<{ 
-  onAddTransaction: (newTx: Transaction) => void;
+  onTransactionAdded: () => void; // Callback to refresh data
   accounts: Account[];
-}> = ({ onAddTransaction, accounts }) => {
+}> = ({ onTransactionAdded, accounts }) => {
   const { toast } = useToast();
   const form = useForm<TransactionFormData>({
     resolver: zodResolver(transactionFormSchema),
@@ -77,7 +87,7 @@ const AddTransactionForm: React.FC<{
   });
 
   useEffect(() => {
-    if (accounts.length > 0 && !accounts.find(acc => acc.id === form.getValues("accountId"))) {
+    if (accounts.length > 0 && !form.getValues("accountId")) {
       form.setValue("accountId", accounts[0].id);
     } else if (accounts.length === 0 && form.getValues("accountId") !== "") {
       form.setValue("accountId", "");
@@ -85,26 +95,32 @@ const AddTransactionForm: React.FC<{
   }, [accounts, form]);
 
 
-  const onSubmit = (data: TransactionFormData) => {
-    const newTransaction: Transaction = {
-      id: `txn_${Date.now()}`,
+  const onSubmit = async (data: TransactionFormData) => {
+    const newTransactionData: Omit<Transaction, 'id'> = {
       accountId: data.accountId,
-      date: new Date(data.date).toISOString(),
+      date: new Date(data.date).toISOString(), // Ensure date is stored as ISO string
       description: data.description,
       amount: data.type === 'expense' ? -Math.abs(data.amount) : Math.abs(data.amount),
       category: data.category,
       status: 'posted', 
     };
-    onAddTransaction(newTransaction);
-    toast({ title: "Transaction Added", description: `${data.description} successfully added.` });
-    form.reset({
-        description: "",
-        amount: 0,
-        date: format(new Date(), 'yyyy-MM-dd'),
-        category: "",
-        accountId: accounts[0]?.id || "",
-        type: "expense",
-    });
+    
+    const result = await addTransaction(newTransactionData);
+    if (result) {
+      toast({ title: "Transaction Added", description: `${data.description} successfully added.` });
+      await recalculateAndUpdateAccountBalance(result.accountId); // Recalculate balance for the affected account
+      onTransactionAdded(); // Refresh data on the page
+      form.reset({
+          description: "",
+          amount: 0,
+          date: format(new Date(), 'yyyy-MM-dd'),
+          category: "",
+          accountId: accounts[0]?.id || "",
+          type: "expense",
+      });
+    } else {
+      toast({ title: "Error", description: "Failed to add transaction.", variant: "destructive" });
+    }
   };
 
   return (
@@ -162,7 +178,7 @@ const AddTransactionForm: React.FC<{
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Date</FormLabel>
-                    <FormControl><Input type="date" {...field} /></FormControl>
+                    <FormControl><Input type="date" {...field} value={field.value ? format(new Date(field.value), 'yyyy-MM-dd') : ''} /></FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -196,7 +212,7 @@ const AddTransactionForm: React.FC<{
                         {accounts.map(acc => <SelectItem key={acc.id} value={acc.id}>{acc.name} ({acc.bankName})</SelectItem>)}
                       </SelectContent>
                     </Select>
-                    {accounts.length === 0 && <FormDescription>Upload a transaction file to populate accounts or add them manually (feature pending).</FormDescription>}
+                    {accounts.length === 0 && <FormDescription>No accounts available. Upload a CSV with account info or add accounts manually.</FormDescription>}
                     <FormMessage />
                   </FormItem>
                 )}
@@ -313,9 +329,9 @@ const TransactionInsights: React.FC<{ transaction: Transaction }> = ({ transacti
 };
 
 const FileUploadCard: React.FC<{
-  onFileUpload: (transactions: Transaction[], accounts: Account[]) => void;
+  onDataUploaded: () => void; // Callback to refresh data
   existingAccounts: Account[];
-}> = ({ onFileUpload, existingAccounts }) => {
+}> = ({ onDataUploaded, existingAccounts }) => {
   const { toast } = useToast();
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -335,7 +351,7 @@ const FileUploadCard: React.FC<{
       }
 
       const lines = csvText.split(/\r\n|\n/).filter(line => line.trim() !== '');
-      if (lines.length < 1) { // Needs at least a header
+      if (lines.length < 1) {
         toast({ title: "Invalid CSV", description: "CSV file must have at least a header row.", variant: "destructive" });
         setIsProcessing(false);
         return;
@@ -350,35 +366,50 @@ const FileUploadCard: React.FC<{
           requiredFields: [...REQUIRED_TRANSACTION_FIELDS],
         });
         
-        // Validate mapping - check if crucial fields like Date and Amount are mapped
-        if (!mappingResult.Date || !mappingResult.Amount) {
-            toast({ title: "Header Mapping Failed", description: "AI could not map essential fields like 'Date' or 'Amount'. Please check CSV header.", variant: "destructive" });
+        if (!mappingResult.Date || !mappingResult.Amount || !mappingResult.Description) {
+            toast({ title: "Header Mapping Failed", description: "AI could not map essential fields (Date, Amount, Description). Please check CSV header.", variant: "destructive" });
             setIsProcessing(false);
             return;
         }
 
-        const { parsedTransactions, newOrUpdatedAccounts } = parseCSVContent(
-          headerLine.split(',').map(h => h.trim()), // Actual header string array
-          dataLines, // Data lines only
-          mappingResult, // LLM mapping
+        const { parsedTransactions, newAccountsToCreate } = parseCSVContent(
+          headerLine.split(',').map(h => h.trim()), 
+          dataLines, 
+          mappingResult, 
           existingAccounts
         );
 
-        onFileUpload(parsedTransactions, newOrUpdatedAccounts);
-        toast({ title: "File Processed", description: `${parsedTransactions.length} transactions loaded.` });
+        // Add new accounts to DB
+        for (const accData of newAccountsToCreate) {
+          await addAccount(accData);
+        }
+        
+        // Add transactions to DB
+        if (parsedTransactions.length > 0) {
+          const batchResult = await addTransactionsBatch(parsedTransactions);
+          toast({ title: "File Processed", description: `${batchResult.successCount} of ${parsedTransactions.length} transactions loaded.` });
+          if (batchResult.errors.length > 0) {
+            console.error("Errors during batch transaction add:", batchResult.errors);
+            toast({ title: "Import Issues", description: `${batchResult.errors.length} transactions had issues. Check console.`, variant: "destructive"});
+          }
+        } else {
+            toast({ title: "No Transactions", description: "No transactions were parsed from the file." });
+        }
+        await recalculateAllAccountBalances(); // Recalculate all account balances after batch import
+        onDataUploaded(); // Refresh data on the page
 
       } catch (error: any) {
         console.error("File processing error:", error);
         toast({ title: "Error Processing File", description: error.message || "Could not process CSV with AI mapping.", variant: "destructive" });
       } finally {
         setIsProcessing(false);
-        event.target.value = ""; 
+        if (event.target) event.target.value = ""; 
       }
     };
     reader.onerror = () => {
         toast({ title: "Error reading file", description: "Could not read file.", variant: "destructive"});
         setIsProcessing(false);
-        event.target.value = "";
+        if (event.target) event.target.value = "";
     };
     reader.readAsText(file);
   };
@@ -388,13 +419,13 @@ const FileUploadCard: React.FC<{
     dataLines: string[],
     mapping: MapCsvHeaderOutput,
     currentAccounts: Account[]
-  ): { parsedTransactions: Transaction[], newOrUpdatedAccounts: Account[] } => {
+  ): { parsedTransactions: Omit<Transaction, 'id'>[], newAccountsToCreate: (Omit<Account, 'id' | 'balance'> & { id: string, balance?: number })[] } => {
     
-    const transactions: Transaction[] = [];
-    let tempAccounts = [...currentAccounts];
-    const uniqueAccountNames = new Set<string>(currentAccounts.map(a => a.name));
+    const transactions: Omit<Transaction, 'id'>[] = [];
+    const newAccountsMap = new Map<string, Omit<Account, 'id' | 'balance'> & { id: string, balance?: number }>();
+    const existingAccountMap = new Map(currentAccounts.map(acc => [acc.name.toLowerCase(), acc.id]));
+    let tempAccountIdCounter = Date.now(); // For generating temporary unique IDs for new accounts from CSV
 
-    // Create an index map from our internal field names to their actual column index in the CSV
     const columnIndexMap: Partial<Record<typeof REQUIRED_TRANSACTION_FIELDS[number], number>> = {};
     for (const requiredField of REQUIRED_TRANSACTION_FIELDS) {
         const csvColumnName = mapping[requiredField];
@@ -402,52 +433,45 @@ const FileUploadCard: React.FC<{
             const index = actualHeader.indexOf(csvColumnName);
             if (index !== -1) {
                 columnIndexMap[requiredField] = index;
-            } else {
-                // This case should ideally be caught by the mapping validation earlier
-                // or the LLM returning null for unmappable critical fields.
-                console.warn(`Mapped column '${csvColumnName}' for '${requiredField}' not found in actual header.`);
             }
         }
     }
 
-    // Check for essential columns after attempting to map
     if (columnIndexMap.Date === undefined || columnIndexMap.Amount === undefined || columnIndexMap.Description === undefined) {
-        throw new Error("Essential fields (Date, Amount, Description) could not be mapped or found in the CSV header. Please check your CSV file or the AI mapping.");
+        throw new Error("Essential fields (Date, Amount, Description) could not be mapped or found in the CSV header.");
     }
 
     for (let i = 0; i < dataLines.length; i++) {
       const line = dataLines[i];
-      if (line.trim() === "") continue; // Skip empty lines
+      if (line.trim() === "") continue; 
 
-      const values = line.split(',').map(v => v.trim());
+      const values = line.split(',').map(v => v.trim().replace(/^"|"$/g, '')); // Trim and remove surrounding quotes
       if (values.length !== actualHeader.length) {
-        console.warn(`Skipping malformed row ${i + 1} (data part): column count mismatch.`);
+        console.warn(`Skipping malformed row ${i + 1}: column count mismatch. Expected ${actualHeader.length}, got ${values.length}. Line: "${line}"`);
         continue;
       }
 
-      const getDateValue = (index?: number): string | undefined => values[index ?? -1];
-      const getStringValue = (index?: number): string => values[index ?? -1] || "";
-      const getNumericValue = (index?: number): number => parseFloat(values[index ?? -1]);
-
-      // Account Name
+      const getDateValue = (index?: number): string | undefined => index !== undefined ? values[index] : undefined;
+      const getStringValue = (index?: number): string => (index !== undefined ? values[index] : "") || "";
+      const getNumericValue = (index?: number): number => index !== undefined ? parseFloat(values[index]) : NaN;
+      
       const accountNameCsvColumn = mapping['Account Name'];
       const accountNameIndex = accountNameCsvColumn ? actualHeader.indexOf(accountNameCsvColumn) : -1;
       const accountName = accountNameIndex !== -1 ? getStringValue(accountNameIndex) : "Default Account";
       
-      let account = tempAccounts.find(acc => acc.name === accountName);
-      if (!account) {
-        if (!uniqueAccountNames.has(accountName)) {
-             uniqueAccountNames.add(accountName);
-        }
-        const newAccountId = `acc_csv_${uniqueAccountNames.size}_${Date.now()}`;
-        account = {
-          id: newAccountId,
-          name: accountName,
-          bankName: "Uploaded File", 
-          balance: 0, 
-          type: 'checking', 
-        };
-        tempAccounts.push(account);
+      let accountId = existingAccountMap.get(accountName.toLowerCase());
+
+      if (!accountId) {
+          const newTempId = `csv_acc_${tempAccountIdCounter++}`;
+          if (!newAccountsMap.has(accountName.toLowerCase())) {
+            newAccountsMap.set(accountName.toLowerCase(), {
+                id: newTempId, // This ID will be used for adding to DB
+                name: accountName,
+                bankName: "Uploaded File", 
+                type: 'checking', // Default type
+            });
+          }
+          accountId = newAccountsMap.get(accountName.toLowerCase())!.id;
       }
       
       const dateStr = getDateValue(columnIndexMap.Date);
@@ -455,12 +479,10 @@ const FileUploadCard: React.FC<{
           console.warn(`Skipping row ${i + 1} due to missing date.`);
           continue;
       }
-      // Try parsing common date formats, be more robust in production
-      // Common formats: YYYY-MM-DD, MM/DD/YYYY, DD-MM-YYYY etc.
       let parsedDate = parse(dateStr, 'yyyy-MM-dd', new Date());
       if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'MM/dd/yyyy', new Date());
       if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'dd-MM-yyyy', new Date());
-      // Add more formats as needed
+      if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'M/d/yy', new Date()); // Common short format
 
       if (!isValid(parsedDate)) {
           console.warn(`Skipping row ${i+1} due to invalid date format: ${dateStr}`);
@@ -469,37 +491,34 @@ const FileUploadCard: React.FC<{
 
       let amount = getNumericValue(columnIndexMap.Amount);
       if (isNaN(amount)) {
-          console.warn(`Skipping row ${i+1} due to invalid amount.`);
+          console.warn(`Skipping row ${i+1} due to invalid or missing amount. Value: "${values[columnIndexMap.Amount!]}"`);
           continue;
       }
 
-      let transactionType: "income" | "expense" = "expense"; // Default
+      let transactionType: "income" | "expense" = "expense"; 
       const typeCsvColumn = mapping.Type;
       const typeIndex = typeCsvColumn ? actualHeader.indexOf(typeCsvColumn) : -1;
 
       if (typeIndex !== -1) {
           const typeValue = getStringValue(typeIndex).toLowerCase();
-          if (typeValue === "income" || typeValue === "credit" || typeValue === "deposit") {
+          if (typeValue.includes("income") || typeValue.includes("credit") || typeValue.includes("deposit")) {
               transactionType = "income";
-          } else if (typeValue === "expense" || typeValue === "debit" || typeValue === "withdrawal" || typeValue === "payment") {
+          } else if (typeValue.includes("expense") || typeValue.includes("debit") || typeValue.includes("withdrawal") || typeValue.includes("payment")) {
               transactionType = "expense";
           }
       } else {
-          // If no 'Type' column, infer from amount sign (if CSV provides signed amounts)
           if (amount > 0) transactionType = "income";
           else if (amount < 0) transactionType = "expense";
-          // If amount is 0 or positive only and no type, it defaults to expense above
       }
       
-      amount = Math.abs(amount); // Store amount as positive, type determines income/expense
+      amount = Math.abs(amount); 
 
       const categoryCsvColumn = mapping.Category;
       const categoryIndex = categoryCsvColumn ? actualHeader.indexOf(categoryCsvColumn) : -1;
       const category = categoryIndex !== -1 ? getStringValue(categoryIndex) : "Uncategorized";
       
       transactions.push({
-        id: `csv_txn_${Date.now()}_${i}`,
-        accountId: account.id,
+        accountId: accountId!,
         date: parsedDate.toISOString(),
         description: getStringValue(columnIndexMap.Description) || "N/A",
         amount: transactionType === 'expense' ? -amount : amount,
@@ -507,7 +526,7 @@ const FileUploadCard: React.FC<{
         status: 'posted',
       });
     }
-    return { parsedTransactions: transactions, newOrUpdatedAccounts: tempAccounts };
+    return { parsedTransactions: transactions, newAccountsToCreate: Array.from(newAccountsMap.values()) };
   };
 
 
@@ -532,23 +551,26 @@ const FileUploadCard: React.FC<{
 
 
 export default function TransactionsPage() {
-  const [transactions, setTransactions] = useState<Transaction[]>(initialMockTransactions);
-  const [accounts, setAccounts] = useState<Account[]>(initialMockAccounts);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const handleAddTransaction = (newTx: Transaction) => {
-    setTransactions(prev => [newTx, ...prev]);
-  };
+  const fetchData = useCallback(async () => {
+    setIsLoading(true);
+    const [dbAccounts, dbTransactions] = await Promise.all([
+      getAccounts(),
+      getTransactions()
+    ]);
+    setAccounts(dbAccounts);
+    setTransactions(dbTransactions);
+    setIsLoading(false);
+  }, []);
 
-  const handleFileUpload = useCallback((uploadedTransactions: Transaction[], updatedAccounts: Account[]) => {
-    setTransactions(prev => [...uploadedTransactions, ...prev.filter(ptx => !uploadedTransactions.find(utx => utx.id === ptx.id))]); // Merge, avoid duplicates by ID if any
-    
-    // Update accounts: add new ones, potentially update existing if logic was added (not in this version)
-    const newAccountIds = new Set(updatedAccounts.map(a => a.id));
-    const existingAccountsToKeep = accounts.filter(acc => !newAccountIds.has(acc.id));
-    setAccounts([...existingAccountsToKeep, ...updatedAccounts]);
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
 
-  }, [accounts]); // Added accounts to dependency array
 
   const columns: ColumnDef<Transaction>[] = useMemo(() => [
     {
@@ -635,11 +657,15 @@ export default function TransactionsPage() {
   ], [accounts]);
 
 
+  if (isLoading) {
+    return <div className="flex justify-center items-center h-64"><p>Loading data...</p></div>;
+  }
+
   return (
     <Dialog onOpenChange={(isOpen) => { if (!isOpen) setSelectedTransaction(null); }}>
       <div className="space-y-6">
-        <FileUploadCard onFileUpload={handleFileUpload} existingAccounts={accounts} />
-        <AddTransactionForm onAddTransaction={handleAddTransaction} accounts={accounts} />
+        <FileUploadCard onDataUploaded={fetchData} existingAccounts={accounts} />
+        <AddTransactionForm onTransactionAdded={fetchData} accounts={accounts} />
         <Card>
           <CardHeader>
             <CardTitle>Transaction History</CardTitle>
@@ -651,7 +677,7 @@ export default function TransactionsPage() {
               filterColumnId="description"
               filterPlaceholder="Filter by description..."
             />
-            {transactions.length === 0 && (
+            {transactions.length === 0 && !isLoading && (
                 <div className="text-center py-10">
                     <p className="text-muted-foreground">No transactions to display. Upload a CSV file or add transactions manually.</p>
                 </div>

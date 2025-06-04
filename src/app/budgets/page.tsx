@@ -1,6 +1,7 @@
+
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -22,25 +23,25 @@ import {
   DialogFooter,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { mockBudgets, transactionCategories, mockTransactions } from '@/lib/mock-data';
+import { mockBudgets, transactionCategories } from '@/lib/mock-data'; // mockTransactions removed
 import type { Budget, Transaction } from '@/lib/types';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns';
 import { PlusCircle, Edit, Trash2, Target } from 'lucide-react';
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useToast } from "@/hooks/use-toast";
+import { getTransactions } from '@/lib/actions'; // Import getTransactions
 
 const budgetFormSchema = z.object({
   name: z.string().min(1, "Budget name is required"),
   category: z.string().min(1, "Category is required"),
   limit: z.coerce.number().positive("Limit must be a positive number"),
-  startDate: z.string().min(1, "Start date is required"),
-  endDate: z.string().min(1, "End date is required").refine((data) => {
-    // This is a bit tricky within a single field refine. Usually done at schema level.
-    // For now, we'll assume dates are valid or add cross-field validation if needed.
-    return true; 
-  }, "End date must be after start date"),
+  startDate: z.string().refine((val) => isValid(parseISO(val)), { message: "Start date is required and must be valid"}),
+  endDate: z.string().refine((val) => isValid(parseISO(val)), { message: "End date is required and must be valid"}),
+}).refine(data => parseISO(data.endDate) >= parseISO(data.startDate), {
+  message: "End date must be after or the same as start date",
+  path: ["endDate"], // path of error
 });
 
 type BudgetFormData = z.infer<typeof budgetFormSchema>;
@@ -114,63 +115,77 @@ const BudgetForm: React.FC<{
 };
 
 export default function BudgetsPage() {
-  const [budgets, setBudgets] = useState<Budget[]>([]);
-  const [allTransactions, setAllTransactions] = useState<Transaction[]>(mockTransactions); // Assuming global access for calculation
+  const [budgets, setBudgets] = useState<Budget[]>(mockBudgets); // Budgets still from mock, not DB
+  const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
+  const [isLoadingTransactions, setIsLoadingTransactions] = useState(true);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingBudget, setEditingBudget] = useState<Budget | undefined>(undefined);
   const { toast } = useToast();
 
+  const fetchDbTransactions = useCallback(async () => {
+    setIsLoadingTransactions(true);
+    const dbTransactions = await getTransactions();
+    setAllTransactions(dbTransactions);
+    setIsLoadingTransactions(false);
+  }, []);
+
   useEffect(() => {
-    // Calculate spent amount for each budget based on transactions
-    const updatedBudgets = mockBudgets.map(budget => {
-      const spent = allTransactions
-        .filter(t => 
-          t.category === budget.category &&
-          t.amount < 0 &&
-          new Date(t.date) >= new Date(budget.startDate) &&
-          new Date(t.date) <= new Date(budget.endDate)
-        )
-        .reduce((sum, t) => sum + Math.abs(t.amount), 0);
-      return { ...budget, spent };
-    });
-    setBudgets(updatedBudgets);
-  }, [allTransactions]);
+    fetchDbTransactions();
+  }, [fetchDbTransactions]);
+
+  const calculateSpentForBudget = useCallback((budget: Budget, transactions: Transaction[]): number => {
+    return transactions
+      .filter(t => 
+        t.category === budget.category &&
+        t.amount < 0 && // Only expenses count towards budget
+        isWithinInterval(parseISO(t.date), { 
+          start: startOfDay(parseISO(budget.startDate)), 
+          end: endOfDay(parseISO(budget.endDate)) 
+        })
+      )
+      .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+  }, []);
+
+  useEffect(() => {
+    // Recalculate spent amounts when transactions or budgets change
+    if (!isLoadingTransactions) {
+        const updatedBudgets = budgets.map(budget => ({
+        ...budget,
+        spent: calculateSpentForBudget(budget, allTransactions),
+      }));
+      // Only update if there's a change to avoid infinite loops if setBudgets causes re-render
+      if (JSON.stringify(updatedBudgets) !== JSON.stringify(budgets)) {
+        setBudgets(updatedBudgets);
+      }
+    }
+  }, [allTransactions, budgets, isLoadingTransactions, calculateSpentForBudget]);
 
 
   const handleBudgetSubmit = (data: BudgetFormData, id?: string) => {
+    const budgetStartDate = startOfDay(parseISO(data.startDate)).toISOString();
+    const budgetEndDate = endOfDay(parseISO(data.endDate)).toISOString();
+
     if (id) { // Editing existing budget
       setBudgets(prev => prev.map(b => b.id === id ? { 
         ...b, 
         ...data, 
         limit: Number(data.limit),
-        startDate: new Date(data.startDate).toISOString(),
-        endDate: new Date(data.endDate).toISOString(),
-        // Recalculate spent for edited budget
-        spent: allTransactions
-          .filter(t => 
-            t.category === data.category &&
-            t.amount < 0 &&
-            new Date(t.date) >= new Date(data.startDate) &&
-            new Date(t.date) <= new Date(data.endDate)
-          )
-          .reduce((sum, t) => sum + Math.abs(t.amount), 0)
+        startDate: budgetStartDate,
+        endDate: budgetEndDate,
+        spent: calculateSpentForBudget({ ...b, ...data, startDate: budgetStartDate, endDate: budgetEndDate }, allTransactions)
        } : b));
       toast({ title: "Budget Updated", description: `${data.name} has been updated.`});
     } else { // Creating new budget
-      const newBudget: Budget = {
+      const newBudgetBase: Omit<Budget, 'spent'> = {
         id: `bud_${Date.now()}`,
         ...data,
         limit: Number(data.limit),
-        spent: allTransactions
-          .filter(t => 
-            t.category === data.category &&
-            t.amount < 0 &&
-            new Date(t.date) >= new Date(data.startDate) &&
-            new Date(t.date) <= new Date(data.endDate)
-          )
-          .reduce((sum, t) => sum + Math.abs(t.amount), 0),
-        startDate: new Date(data.startDate).toISOString(),
-        endDate: new Date(data.endDate).toISOString(),
+        startDate: budgetStartDate,
+        endDate: budgetEndDate,
+      };
+      const newBudget: Budget = {
+        ...newBudgetBase,
+        spent: calculateSpentForBudget(newBudgetBase, allTransactions),
       };
       setBudgets(prev => [newBudget, ...prev]);
       toast({ title: "Budget Created", description: `${data.name} has been created.`});
@@ -189,6 +204,9 @@ export default function BudgetsPage() {
     toast({ title: "Budget Deleted", description: "The budget has been removed.", variant: "destructive" });
   };
 
+  if (isLoadingTransactions) {
+    return <div className="flex justify-center items-center h-64"><p>Loading budget data...</p></div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -224,9 +242,9 @@ export default function BudgetsPage() {
           <CardContent className="flex flex-col items-center gap-4">
             <Target className="h-16 w-16 text-muted-foreground" />
             <p className="text-muted-foreground">No budgets created yet.</p>
-             <Button onClick={() => { setEditingBudget(undefined); setIsFormOpen(true); }}>
+            <Button onClick={() => { setEditingBudget(undefined); setIsFormOpen(true); }}>
                 Create Your First Budget
-              </Button>
+            </Button>
           </CardContent>
         </Card>
       ) : (
@@ -236,9 +254,11 @@ export default function BudgetsPage() {
             const remaining = budget.limit - budget.spent;
             const isOverBudget = budget.spent > budget.limit;
             
-            let progressColorClass = "bg-primary"; // Default blue
-            if (progress > 75 && progress <= 100) progressColorClass = "bg-yellow-500"; // Yellow for warning
-            if (isOverBudget) progressColorClass = "bg-destructive"; // Red for over budget
+            let progressColor: string;
+            if (isOverBudget) progressColor = 'hsl(var(--destructive))';
+            else if (progress > 75) progressColor = 'hsl(var(--chart-4))'; // Using an orange-ish chart color for warning
+            else progressColor = 'hsl(var(--primary))';
+
 
             return (
               <Card key={budget.id} className="flex flex-col">
@@ -263,7 +283,17 @@ export default function BudgetsPage() {
                     <span className="text-2xl font-bold">${budget.spent.toFixed(2)}</span>
                     <span className="text-sm text-muted-foreground"> / ${budget.limit.toFixed(2)}</span>
                   </div>
-                  <Progress value={Math.min(progress, 100)} className="h-3 [&>div]:bg-[--progress-color]" style={{ '--progress-color': `var(--${isOverBudget ? 'destructive' : progress > 75 ? 'yellow-500' : 'primary'})` } as React.CSSProperties} />
+                  <Progress 
+                    value={Math.min(progress, 100)} 
+                    className="h-3" 
+                    style={{ '--progress-color': progressColor } as React.CSSProperties}
+                  />
+                   <style jsx global>{`
+                    .h-3 > div[role="progressbar"] {
+                      background-color: var(--progress-color) !important;
+                    }
+                  `}</style>
+
 
                   <p className={`mt-2 text-sm ${isOverBudget ? 'text-destructive' : 'text-muted-foreground'}`}>
                     {isOverBudget 
@@ -281,6 +311,44 @@ export default function BudgetsPage() {
           })}
         </div>
       )}
+      <Card>
+        <CardHeader><CardTitle>Note on Budget Data</CardTitle></CardHeader>
+        <CardContent>
+            <p className="text-sm text-muted-foreground">
+                Budget definitions are currently managed in memory (using mock data as a base) and are not persisted in the database.
+                However, the "spent" amounts for these budgets are calculated using transaction data fetched from the SQLite database.
+            </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }
+
+// Custom style for Progress component's indicator
+const GlobalProgressStyle = () => (
+  <style jsx global>{`
+    .h-3 > div[role="progressbar"] {
+      background-color: var(--progress-color) !important;
+    }
+  `}</style>
+);
+
+// This should be placed in your RootLayout or a global CSS file if not already handled by Tailwind.
+// However, for ShadCN Progress, direct style manipulation on the Indicator is often needed if you want dynamic colors beyond primary.
+// The provided Progress component's styling might make this tricky.
+// The inline style with CSS variable is a common workaround.
+// The provided `Progress` component from shadcn uses `bg-primary` for the indicator.
+// To override it dynamically, we can pass a style prop with a CSS variable like above.
+// And ensure that the `ProgressPrimitive.Indicator` in `progress.tsx` can accept this.
+// It seems the current `Progress` component in `components/ui/progress.tsx` is:
+// <ProgressPrimitive.Indicator
+// className="h-full w-full flex-1 bg-primary transition-all"
+// style={{ transform: `translateX(-${100 - (value || 0)}%)` }}
+// />
+// To make the color dynamic via CSS variable, we'd ideally change `bg-primary` to something like `bg-[var(--progress-color)]`
+// and ensure `--progress-color` is defined.
+// For now, the inline style approach combined with a <style jsx global> tag as shown above is a workaround.
+// A cleaner solution would be to modify the Progress component itself to accept a color prop or use a CSS variable for its background.
+// Given the constraints, the `style={{ '--progress-color': progressColor } as React.CSSProperties}` on the Progress component
+// and the `<style jsx global>` should work.
+

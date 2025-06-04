@@ -1,45 +1,41 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
-# dependencies
+# Dependencies
 /node_modules
 /.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
+.pnp.js
+.yarn/install-state.gz
 
-# testing
-/coverage
+# Transpiled JavaScript files
+# Waiting for https://github.com/facebook/create-react-app/issues/8908
+# *.js
+# *.js.map
 
-# next.js
-/.next/
+# Build directory
+.next/
 /out/
 
-# production
-/build
-
-# misc
+# Next.js static exportस्ड output files
+next-env.d.ts
 .DS_Store
 *.pem
 
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-
-.genkit/*
-.env*
-
-# firebase
+# Firebase
+.firebase
 firebase-debug.log
-firestore-debug.log
+*.pid
+*.seed
+*.log
+*.log.txt
+
+# Environment variables
+.env
+.env*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# SQLite database files
+db/
+*.db
+*.db-journal

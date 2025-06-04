@@ -1,16 +1,14 @@
 
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { mockAccounts as initialMockAccounts } from '@/lib/mock-data'; // Keep for existing manual/mock accounts
+// import { mockAccounts as initialMockAccounts } from '@/lib/mock-data'; // Keep for existing manual/mock accounts
 import type { Account } from '@/lib/types';
-import { PlusCircle, Landmark, WalletCards, Edit, Trash2, CreditCard, DollarSign, Bitcoin } from 'lucide-react';
+import { PlusCircle, Landmark, WalletCards, Trash2, CreditCard, DollarSign, Bitcoin } from 'lucide-react';
 import { useToast } from "@/hooks/use-toast";
-
-// Note: Plaid integration (usePlaidLink, createLinkToken, exchangePublicToken) has been removed.
-// This page will now primarily display accounts, which might come from mock data or future file uploads.
+import { getAccounts, recalculateAllAccountBalances } from '@/lib/actions'; // Import getAccounts
 
 const AccountIcon: React.FC<{ type: Account['type'] }> = ({ type }) => {
   switch (type) {
@@ -24,22 +22,36 @@ const AccountIcon: React.FC<{ type: Account['type'] }> = ({ type }) => {
 };
 
 export default function AccountsPage() {
-  // For now, accounts are still sourced from mockData.
-  // In a full file-based system, this state would be populated by an accounts file upload
-  // or derived from transaction file uploads.
-  const [accounts, setAccounts] = useState<Account[]>(initialMockAccounts);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
 
-  // Placeholder for deleting an account (if manually managed or from a file)
-  const handleDeleteAccount = (accountId: string) => {
-    setAccounts(prev => prev.filter(acc => acc.id !== accountId));
-    toast({ title: "Account Removed", description: "The account has been removed from view.", variant: "destructive"});
-  };
+  const fetchAccountsData = useCallback(async () => {
+    setIsLoading(true);
+    // It might be beneficial to recalculate balances before fetching
+    // if other parts of the app are adding transactions without explicitly updating balances.
+    // However, if addTransaction/addTransactionsBatch correctly call recalculate, this might not be strictly needed here.
+    // For robustness, let's ensure balances are up-to-date when this page loads.
+    await recalculateAllAccountBalances();
+    const dbAccounts = await getAccounts();
+    setAccounts(dbAccounts);
+    setIsLoading(false);
+  }, []);
 
-  // Placeholder for adding/editing accounts manually or via file - future enhancement
-  // const handleAddOrEditAccount = () => {
-  //   toast({ title: "Feature Coming Soon", description: "Managing accounts via file upload or manual entry will be implemented here."});
-  // };
+  useEffect(() => {
+    fetchAccountsData();
+  }, [fetchAccountsData]);
+
+  const handleDeleteAccount = (accountId: string) => {
+    // Note: This is a client-side removal for now.
+    // True DB deletion would require a server action and consideration for related transactions.
+    setAccounts(prev => prev.filter(acc => acc.id !== accountId));
+    toast({ title: "Account Removed (Visually)", description: "The account has been removed from this view. Database deletion is not yet implemented.", variant: "destructive"});
+  };
+  
+  if (isLoading) {
+    return <div className="flex justify-center items-center h-64"><p>Loading accounts...</p></div>;
+  }
 
   return (
     <div className="space-y-6">
@@ -56,12 +68,9 @@ export default function AccountsPage() {
          <Card className="text-center py-10">
           <CardContent className="flex flex-col items-center gap-4">
             <Landmark className="h-16 w-16 text-muted-foreground" />
-            <p className="text-muted-foreground">No accounts found.</p>
-            {/* <Button onClick={handleAddOrEditAccount}>
-                <PlusCircle className="mr-2 h-4 w-4" /> Add Your First Account
-            </Button> */}
+            <p className="text-muted-foreground">No accounts found in the database.</p>
              <p className="text-sm text-muted-foreground mt-2">
-              Account data can be populated by uploading a transaction file on the Transactions page.
+              Accounts can be populated by uploading a transaction CSV file on the Transactions page.
             </p>
           </CardContent>
         </Card>
@@ -84,8 +93,6 @@ export default function AccountsPage() {
                  <p className="text-xs text-muted-foreground mt-1">ID: {account.id}</p>
               </CardContent>
               <CardFooter className="flex justify-end gap-2">
-                {/* Manual edit/delete might be complex if accounts are solely derived from transaction files */}
-                {/* <Button variant="ghost" size="sm"><Edit className="h-4 w-4 mr-1" /> Edit</Button> */}
                 <Button variant="outline" size="sm" onClick={() => handleDeleteAccount(account.id)} className="text-destructive hover:text-destructive hover:border-destructive">
                   <Trash2 className="h-4 w-4 mr-1" /> Remove
                 </Button>
@@ -100,12 +107,12 @@ export default function AccountsPage() {
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground">
-            This page displays accounts. Previously, this was managed via Plaid integration. Now, with file-based imports:
+            This page displays accounts stored in the application's database.
           </p>
           <ul className="list-disc list-inside text-sm text-muted-foreground space-y-1 mt-2">
-            <li>Account information (like names and IDs) can be inferred from an uploaded transaction CSV file on the 'Transactions' page.</li>
-            <li>Balances shown here are based on initial mock data or simple calculations and may not reflect real-time totals from uploaded files without further development.</li>
-            <li>A dedicated feature to upload an "accounts file" or manually manage accounts in more detail could be added in the future.</li>
+            <li>Account information (like names, IDs, types) is populated from uploaded transaction CSV files on the 'Transactions' page.</li>
+            <li>Balances shown here are calculated based on the transactions associated with each account in the database.</li>
+            <li>Manual account management (add, edit, true delete) can be added as a future enhancement.</li>
           </ul>
         </CardContent>
       </Card>
