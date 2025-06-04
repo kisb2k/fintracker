@@ -1,3 +1,4 @@
+
 import type { Account, Transaction, Budget } from './types';
 
 export const mockAccounts: Account[] = [
@@ -41,7 +42,9 @@ export const mockAccounts: Account[] = [
   },
 ];
 
-const today = new Date();
+// Use a fixed date to ensure consistency between server and client renders for mock data
+const today = new Date('2024-07-15T12:00:00.000Z');
+
 const getDateString = (daysAgo: number): string => {
   const date = new Date(today);
   date.setDate(today.getDate() - daysAgo);
@@ -147,7 +150,7 @@ export const mockBudgets: Budget[] = [
     name: 'Monthly Groceries',
     category: 'Groceries',
     limit: 400,
-    spent: mockTransactions.filter(t => t.category === 'Groceries' && t.amount < 0).reduce((sum, t) => sum + Math.abs(t.amount), 0),
+    spent: mockTransactions.filter(t => t.category === 'Groceries' && t.amount < 0 && new Date(t.date) >= new Date(today.getFullYear(), today.getMonth(), 1) && new Date(t.date) <= new Date(today.getFullYear(), today.getMonth() + 1, 0)).reduce((sum, t) => sum + Math.abs(t.amount), 0),
     startDate: new Date(today.getFullYear(), today.getMonth(), 1).toISOString(),
     endDate: new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString(),
   },
@@ -156,7 +159,7 @@ export const mockBudgets: Budget[] = [
     name: 'Eating Out',
     category: 'Food & Drink',
     limit: 250,
-    spent: mockTransactions.filter(t => t.category === 'Food & Drink' && t.amount < 0).reduce((sum, t) => sum + Math.abs(t.amount), 0),
+    spent: mockTransactions.filter(t => t.category === 'Food & Drink' && t.amount < 0 && new Date(t.date) >= new Date(today.getFullYear(), today.getMonth(), 1) && new Date(t.date) <= new Date(today.getFullYear(), today.getMonth() + 1, 0)).reduce((sum, t) => sum + Math.abs(t.amount), 0),
     startDate: new Date(today.getFullYear(), today.getMonth(), 1).toISOString(),
     endDate: new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString(),
   },
@@ -165,7 +168,7 @@ export const mockBudgets: Budget[] = [
     name: 'Shopping',
     category: 'Shopping',
     limit: 300,
-    spent: mockTransactions.filter(t => t.category === 'Shopping' && t.amount < 0).reduce((sum, t) => sum + Math.abs(t.amount), 0),
+    spent: mockTransactions.filter(t => t.category === 'Shopping' && t.amount < 0 && new Date(t.date) >= new Date(today.getFullYear(), today.getMonth(), 1) && new Date(t.date) <= new Date(today.getFullYear(), today.getMonth() + 1, 0)).reduce((sum, t) => sum + Math.abs(t.amount), 0),
     startDate: new Date(today.getFullYear(), today.getMonth(), 1).toISOString(),
     endDate: new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString(),
   },
