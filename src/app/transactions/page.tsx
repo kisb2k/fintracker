@@ -26,6 +26,7 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
+  FormDescription,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import {
@@ -339,7 +340,7 @@ const FileUploadCard: React.FC<{
       } catch (error: any) {
         toast({ title: "Error Parsing File", description: error.message || "Could not parse CSV.", variant: "destructive" });
       } finally {
-        setIsParsing(false;
+        setIsParsing(false);
         // Reset file input to allow uploading the same file again if needed
         event.target.value = ""; 
       }
@@ -578,3 +579,4 @@ export default function TransactionsPage() {
     </Dialog>
   );
 }
+
