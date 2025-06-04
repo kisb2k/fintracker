@@ -1,13 +1,14 @@
+
 "use client";
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import type { ColumnDef } from "@tanstack/react-table";
-import { ArrowUpDown, Eye, Sparkles } from "lucide-react";
+import { ArrowUpDown, Eye, Sparkles, UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DataTable } from "@/components/ui/data-table";
-import { mockTransactions, transactionCategories as allCategories, mockAccounts } from "@/lib/mock-data";
-import type { Transaction, CategorizedTransaction, TaxDeductionInfo } from "@/lib/types";
+import { mockTransactions as initialMockTransactions, transactionCategories as allCategories, mockAccounts as initialMockAccounts } from "@/lib/mock-data";
+import type { Transaction, Account, CategorizedTransaction, TaxDeductionInfo } from "@/lib/types";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -37,17 +38,16 @@ import {
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { format, parseISO } from 'date-fns';
+import { format, parse, parseISO, isValid } from 'date-fns';
 import { categorizeTransaction } from '@/ai/flows/categorize-transaction.ts';
 import { identifyTaxDeductions } from '@/ai/flows/identify-tax-deductions.ts';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from '@/components/ui/badge';
 import { useToast } from "@/hooks/use-toast";
 
-
 const transactionFormSchema = z.object({
   description: z.string().min(1, "Description is required"),
-  amount: z.coerce.number().refine(val => val !== 0, "Amount cannot be zero"),
+  amount: z.coerce.number().positive("Amount must be positive. Use Type field for income/expense."),
   date: z.string().min(1, "Date is required"),
   category: z.string().min(1, "Category is required"),
   accountId: z.string().min(1, "Account is required"),
@@ -56,7 +56,10 @@ const transactionFormSchema = z.object({
 
 type TransactionFormData = z.infer<typeof transactionFormSchema>;
 
-const AddTransactionForm: React.FC<{ onAddTransaction: (newTx: Transaction) => void }> = ({ onAddTransaction }) => {
+const AddTransactionForm: React.FC<{ 
+  onAddTransaction: (newTx: Transaction) => void;
+  accounts: Account[];
+}> = ({ onAddTransaction, accounts }) => {
   const { toast } = useToast();
   const form = useForm<TransactionFormData>({
     resolver: zodResolver(transactionFormSchema),
@@ -65,10 +68,20 @@ const AddTransactionForm: React.FC<{ onAddTransaction: (newTx: Transaction) => v
       amount: 0,
       date: format(new Date(), 'yyyy-MM-dd'),
       category: "",
-      accountId: "",
+      accountId: accounts[0]?.id || "",
       type: "expense",
     },
   });
+
+  useEffect(() => {
+    // Reset accountId if accounts list changes and current selection is not valid
+    if (accounts.length > 0 && !accounts.find(acc => acc.id === form.getValues("accountId"))) {
+      form.setValue("accountId", accounts[0].id);
+    } else if (accounts.length === 0 && form.getValues("accountId") !== "") {
+      form.setValue("accountId", "");
+    }
+  }, [accounts, form]);
+
 
   const onSubmit = (data: TransactionFormData) => {
     const newTransaction: Transaction = {
@@ -78,11 +91,18 @@ const AddTransactionForm: React.FC<{ onAddTransaction: (newTx: Transaction) => v
       description: data.description,
       amount: data.type === 'expense' ? -Math.abs(data.amount) : Math.abs(data.amount),
       category: data.category,
-      status: 'posted',
+      status: 'posted', // Manually added transactions are considered posted
     };
     onAddTransaction(newTransaction);
     toast({ title: "Transaction Added", description: `${data.description} successfully added.` });
-    form.reset();
+    form.reset({
+        description: "",
+        amount: 0,
+        date: format(new Date(), 'yyyy-MM-dd'),
+        category: "",
+        accountId: accounts[0]?.id || "",
+        type: "expense",
+    });
   };
 
   return (
@@ -168,12 +188,13 @@ const AddTransactionForm: React.FC<{ onAddTransaction: (newTx: Transaction) => v
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Account</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                    <Select onValueChange={field.onChange} value={field.value} disabled={accounts.length === 0}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select account" /></SelectTrigger></FormControl>
                       <SelectContent>
-                        {mockAccounts.map(acc => <SelectItem key={acc.id} value={acc.id}>{acc.name} ({acc.bankName})</SelectItem>)}
+                        {accounts.map(acc => <SelectItem key={acc.id} value={acc.id}>{acc.name} ({acc.bankName})</SelectItem>)}
                       </SelectContent>
                     </Select>
+                    {accounts.length === 0 && <FormDescription>Upload a transaction file to populate accounts or add them manually (feature pending).</FormDescription>}
                     <FormMessage />
                   </FormItem>
                 )}
@@ -192,12 +213,13 @@ const TransactionInsights: React.FC<{ transaction: Transaction }> = ({ transacti
   const [isLoadingCategory, setIsLoadingCategory] = useState(false);
   const [isLoadingTax, setIsLoadingTax] = useState(false);
   const [categoryResult, setCategoryResult] = useState<CategorizedTransaction | null>(null);
-  const [taxResult, setTaxResult] = useState<TaxDeductionInfo[] | null>(null);
+  const [taxResult, setTaxResult] = useState<TaxDeductionInfo[] | null>(null); // Changed to array
   const [error, setError] = useState<string | null>(null);
 
   const handleCategorize = async () => {
     setIsLoadingCategory(true);
     setError(null);
+    setCategoryResult(null);
     try {
       const result = await categorizeTransaction({ transactionDescription: transaction.description });
       setCategoryResult({
@@ -207,6 +229,7 @@ const TransactionInsights: React.FC<{ transaction: Transaction }> = ({ transacti
       });
     } catch (e) {
       setError("Failed to categorize transaction.");
+      console.error("Categorization error:", e);
     }
     setIsLoadingCategory(false);
   };
@@ -214,17 +237,25 @@ const TransactionInsights: React.FC<{ transaction: Transaction }> = ({ transacti
   const handleTaxDeduction = async () => {
     setIsLoadingTax(true);
     setError(null);
+    setTaxResult(null);
     try {
       const result = await identifyTaxDeductions({ transactionData: JSON.stringify([transaction]) });
-      // Assuming the AI returns JSON string that needs parsing.
-      // And the output is an array, we take the first if it exists.
-      const deductions = JSON.parse(result.taxDeductions);
-      setTaxResult(deductions.length > 0 ? deductions : null);
+      const deductions = JSON.parse(result.taxDeductions) as TaxDeductionInfo[]; // Ensure parsing as array
+      
+      // Filter for deductions relevant to the current transaction
+      const relevantDeductions = deductions.filter(d => d.transactionId === transaction.id || !d.transactionId); // Looser match if transactionId is missing from AI output
+      
+      if(relevantDeductions.length > 0) {
+        setTaxResult(relevantDeductions);
+      } else {
+        // If AI returns empty array or no matching transactionId
+        setTaxResult([]); // Set to empty array to indicate "no deductions found" explicitly
+      }
 
     } catch (e) {
       console.error("Tax deduction error:", e);
-      setError("Failed to identify tax deductions.");
-      setTaxResult(null); // Explicitly set to null on error or no deductions
+      setError("Failed to identify tax deductions or parse result.");
+      setTaxResult([]); // Set to empty array on error
     }
     setIsLoadingTax(false);
   };
@@ -263,11 +294,13 @@ const TransactionInsights: React.FC<{ transaction: Transaction }> = ({ transacti
              <Alert className="mt-2" variant="default">
               <AlertTitle>Potential Tax Deduction Found!</AlertTitle>
               <AlertDescription>
-                <p><strong>Reason:</strong> {taxResult[0].reason || 'AI analysis suggests this might be deductible.'}</p>
+                {taxResult.map((deduction, index) => (
+                  <p key={index}><strong>Reason:</strong> {deduction.reason || deduction.description || 'AI analysis suggests this might be deductible.'}</p>
+                ))}
               </AlertDescription>
             </Alert>
           )}
-          {taxResult === null && !isLoadingTax && !error && (
+          {taxResult && taxResult.length === 0 && !isLoadingTax && !error && ( // Check for empty array
             <p className="text-sm text-muted-foreground mt-2">No specific tax deduction identified for this transaction by the AI.</p>
           )}
         </div>
@@ -279,14 +312,158 @@ const TransactionInsights: React.FC<{ transaction: Transaction }> = ({ transacti
   );
 };
 
+const FileUploadCard: React.FC<{
+  onFileUpload: (transactions: Transaction[], accounts: Account[]) => void;
+  existingAccounts: Account[];
+}> = ({ onFileUpload, existingAccounts }) => {
+  const { toast } = useToast();
+  const [isParsing, setIsParsing] = useState(false);
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsParsing(true);
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const text = e.target?.result as string;
+      if (!text) {
+        toast({ title: "Error reading file", description: "File content is empty.", variant: "destructive" });
+        setIsParsing(false);
+        return;
+      }
+      try {
+        const { parsedTransactions, newOrUpdatedAccounts } = parseCSV(text, existingAccounts);
+        onFileUpload(parsedTransactions, newOrUpdatedAccounts);
+        toast({ title: "File Processed", description: `${parsedTransactions.length} transactions loaded.` });
+      } catch (error: any) {
+        toast({ title: "Error Parsing File", description: error.message || "Could not parse CSV.", variant: "destructive" });
+      } finally {
+        setIsParsing(false;
+        // Reset file input to allow uploading the same file again if needed
+        event.target.value = ""; 
+      }
+    };
+    reader.onerror = () => {
+        toast({ title: "Error reading file", description: "Could not read file.", variant: "destructive"});
+        setIsParsing(false);
+        event.target.value = "";
+    };
+    reader.readAsText(file);
+  };
+
+  // Expected CSV Header: Date,Description,Amount,Type,Category,Account Name
+  const parseCSV = (csvText: string, currentAccounts: Account[]): { parsedTransactions: Transaction[], newOrUpdatedAccounts: Account[] } => {
+    const lines = csvText.split(/\r\n|\n/).filter(line => line.trim() !== '');
+    if (lines.length < 2) throw new Error("CSV file must have a header and at least one data row.");
+
+    const header = lines[0].split(',').map(h => h.trim());
+    const expectedHeaders = ["Date", "Description", "Amount", "Type", "Category", "Account Name"];
+    // Basic header check - can be more robust
+    if (!expectedHeaders.every(eh => header.includes(eh))) {
+        throw new Error(`CSV header mismatch. Expected: "${expectedHeaders.join(", ")}". Got: "${header.join(", ")}"`);
+    }
+    
+    const dateIndex = header.indexOf("Date");
+    const descriptionIndex = header.indexOf("Description");
+    const amountIndex = header.indexOf("Amount");
+    const typeIndex = header.indexOf("Type");
+    const categoryIndex = header.indexOf("Category");
+    const accountNameIndex = header.indexOf("Account Name");
+
+    const transactions: Transaction[] = [];
+    const uniqueAccountNames = new Set<string>(currentAccounts.map(a => a.name));
+    let tempAccounts = [...currentAccounts];
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(',');
+      if (values.length !== header.length) {
+        console.warn(`Skipping malformed row ${i + 1}: ${lines[i]}`);
+        continue;
+      }
+
+      const accountName = values[accountNameIndex]?.trim();
+      let account = tempAccounts.find(acc => acc.name === accountName);
+      if (!account && accountName) {
+        uniqueAccountNames.add(accountName);
+        const newAccountId = `acc_csv_${uniqueAccountNames.size}_${Date.now()}`;
+        account = {
+          id: newAccountId,
+          name: accountName,
+          bankName: "Uploaded File", // Or derive from somewhere if possible
+          balance: 0, // Initial balance, could be updated later
+          type: 'checking', // Default type
+        };
+        tempAccounts.push(account);
+      }
+
+      if (!account) {
+        console.warn(`Skipping row ${i+1} due to missing account for name: ${accountName}`);
+        continue;
+      }
+      
+      const dateStr = values[dateIndex]?.trim();
+      // Try parsing common date formats, be more robust in production
+      const parsedDate = parse(dateStr, 'yyyy-MM-dd', new Date()); 
+      if (!isValid(parsedDate)) {
+          console.warn(`Skipping row ${i+1} due to invalid date: ${dateStr}`);
+          continue;
+      }
+
+      const amount = parseFloat(values[amountIndex]?.trim());
+      const type = values[typeIndex]?.trim().toLowerCase() as "income" | "expense";
+      
+      if (isNaN(amount) || (type !== "income" && type !== "expense")) {
+          console.warn(`Skipping row ${i+1} due to invalid amount or type: Amount=${values[amountIndex]}, Type=${values[typeIndex]}`);
+          continue;
+      }
+
+      transactions.push({
+        id: `csv_txn_${Date.now()}_${i}`,
+        accountId: account.id,
+        date: parsedDate.toISOString(),
+        description: values[descriptionIndex]?.trim() || "N/A",
+        amount: type === 'expense' ? -Math.abs(amount) : Math.abs(amount),
+        category: values[categoryIndex]?.trim() || "Uncategorized",
+        status: 'posted',
+      });
+    }
+    return { parsedTransactions: transactions, newOrUpdatedAccounts: tempAccounts };
+  };
+
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center">
+          <UploadCloud className="mr-2 h-5 w-5" /> Upload Transactions (CSV)
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Input type="file" accept=".csv" onChange={handleFileChange} disabled={isParsing} />
+        {isParsing && <p className="text-sm text-muted-foreground mt-2">Parsing file...</p>}
+        <p className="text-xs text-muted-foreground mt-2">
+          Expected CSV format: Date (YYYY-MM-DD), Description, Amount, Type (income/expense), Category, Account Name
+        </p>
+      </CardContent>
+    </Card>
+  );
+};
+
 
 export default function TransactionsPage() {
-  const [transactions, setTransactions] = useState<Transaction[]>(mockTransactions);
+  const [transactions, setTransactions] = useState<Transaction[]>(initialMockTransactions);
+  const [accounts, setAccounts] = useState<Account[]>(initialMockAccounts);
   const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
 
   const handleAddTransaction = (newTx: Transaction) => {
     setTransactions(prev => [newTx, ...prev]);
   };
+
+  const handleFileUpload = useCallback((uploadedTransactions: Transaction[], updatedAccounts: Account[]) => {
+    setTransactions(uploadedTransactions);
+    setAccounts(updatedAccounts); // Update accounts list based on what was parsed or created
+  }, []);
 
   const columns: ColumnDef<Transaction>[] = useMemo(() => [
     {
@@ -315,7 +492,14 @@ export default function TransactionsPage() {
           Date <ArrowUpDown className="ml-2 h-4 w-4" />
         </Button>
       ),
-      cell: ({ row }) => format(parseISO(row.getValue("date")), "MMM dd, yyyy"),
+      cell: ({ row }) => {
+          const dateValue = row.getValue("date");
+          try {
+            return format(parseISO(dateValue as string), "MMM dd, yyyy");
+          } catch (e) {
+            return "Invalid Date";
+          }
+        }
     },
     {
       accessorKey: "description",
@@ -346,8 +530,8 @@ export default function TransactionsPage() {
       accessorKey: "accountId",
       header: "Account",
       cell: ({row}) => {
-        const account = mockAccounts.find(acc => acc.id === row.getValue("accountId"));
-        return account ? account.name : "Unknown";
+        const account = accounts.find(acc => acc.id === row.getValue("accountId"));
+        return account ? account.name : "Unknown Account";
       }
     },
     {
@@ -363,13 +547,14 @@ export default function TransactionsPage() {
         );
       },
     },
-  ], []);
+  ], [accounts]);
 
 
   return (
     <Dialog onOpenChange={(isOpen) => { if (!isOpen) setSelectedTransaction(null); }}>
       <div className="space-y-6">
-        <AddTransactionForm onAddTransaction={handleAddTransaction} />
+        <FileUploadCard onFileUpload={handleFileUpload} existingAccounts={accounts} />
+        <AddTransactionForm onAddTransaction={handleAddTransaction} accounts={accounts} />
         <Card>
           <CardHeader>
             <CardTitle>Transaction History</CardTitle>
@@ -381,6 +566,11 @@ export default function TransactionsPage() {
               filterColumnId="description"
               filterPlaceholder="Filter by description..."
             />
+            {transactions.length === 0 && (
+                <div className="text-center py-10">
+                    <p className="text-muted-foreground">No transactions to display. Upload a CSV file or add transactions manually.</p>
+                </div>
+            )}
           </CardContent>
         </Card>
         {selectedTransaction && <TransactionInsights transaction={selectedTransaction} />}

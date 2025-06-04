@@ -2,10 +2,10 @@
 export type Account = {
   id: string;
   name: string;
-  bankName: string; // Changed from specific enum to string for Plaid institution names
+  bankName: string; 
   balance: number;
-  type: 'checking' | 'savings' | 'credit card' | 'cash' | 'crypto' | 'other' | 'investment' | 'loan'; // Added 'other', 'investment', 'loan'
-  lastFour?: string; // Optional: last four digits of account number
+  type: 'checking' | 'savings' | 'credit card' | 'cash' | 'crypto' | 'other' | 'investment' | 'loan';
+  lastFour?: string; 
 };
 
 export type Transaction = {
@@ -15,7 +15,7 @@ export type Transaction = {
   description: string;
   amount: number; // positive for income, negative for expense
   category: string;
-  status?: 'pending' | 'posted'; // Optional
+  status?: 'pending' | 'posted';
 };
 
 export type Budget = {
@@ -23,17 +23,10 @@ export type Budget = {
   name: string;
   category: string;
   limit: number;
-  spent: number; // This would typically be calculated
+  spent: number;
   startDate: string; // ISO string
   endDate: string; // ISO string
 };
-
-// This was more for Plaid V1, Plaid Link V2 with usePlaidLink handles token exchange response differently (via server action)
-// export type PlaidTokenExchangeResponse = {
-//   access_token: string;
-//   item_id: string;
-//   request_id: string;
-// };
 
 // For AI Insights
 export type CategorizedTransaction = {
@@ -43,9 +36,9 @@ export type CategorizedTransaction = {
 };
 
 export type TaxDeductionInfo = {
-  transactionId: string;
-  description: string;
-  reason: string;
+  transactionId: string; // Should match Transaction['id']
+  description: string; // Description of why it might be deductible
+  reason: string; // More detailed reason or rule
 };
 
 export type UnusualSpendingInfo = {
@@ -54,20 +47,4 @@ export type UnusualSpendingInfo = {
   suggestions: string;
 };
 
-// Metadata from Plaid Link onSuccess callback
-export interface PlaidLinkOnSuccessMetadata {
-  institution: {
-    name: string;
-    institution_id: string;
-  } | null;
-  accounts: Array<{
-    id: string;
-    name: string;
-    mask: string | null;
-    type: string;
-    subtype: string;
-    verification_status: string | null;
-  }>;
-  link_session_id: string;
-  public_token?: string; // This is the old name for public_token, included for compatibility if old docs are referenced
-}
+// Removed PlaidLinkOnSuccessMetadata as Plaid integration is being replaced.
