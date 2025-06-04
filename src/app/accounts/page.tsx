@@ -1,6 +1,9 @@
+
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { usePlaidLink, type PlaidLinkOptions, type PlaidLinkOnSuccess } from 'react-plaid-link';
+import { createLinkToken, exchangePublicToken } from './actions'; // Import server actions
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -9,43 +12,17 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogFooter as DialogModalFooter, // Renamed to avoid conflict if CardFooter was also named DialogFooter
+  DialogFooter as DialogModalFooter,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { mockAccounts } from '@/lib/mock-data';
+// Input and Label are not used for Plaid Link directly but might be for manual accounts (if kept)
+// import { Input } from "@/components/ui/input";
+// import { Label } from "@/components/ui/label";
+import { mockAccounts } from '@/lib/mock-data'; // Keep for existing manual/mock accounts
 import type { Account } from '@/lib/types';
-import { PlusCircle, Landmark, WalletCards, Edit, Trash2, CreditCard, DollarSign, Bitcoin } from 'lucide-react';
+import { PlusCircle, Landmark, WalletCards, Edit, Trash2, CreditCard, DollarSign, Bitcoin, RefreshCw } from 'lucide-react';
 import Image from 'next/image';
 import { useToast } from "@/hooks/use-toast";
-
-// Dummy Plaid Link Handler - in a real app, this would use Plaid's SDK
-const usePlaidLink = (onSuccess: (publicToken: string, metadata: any) => void) => {
-  const openPlaidLink = (bank: 'chase' | 'discover') => {
-    // Simulate Plaid Link opening and success
-    console.log(`Simulating Plaid Link for ${bank}`);
-    setTimeout(() => {
-      const mockPublicToken = `mock_public_token_${bank}_${Date.now()}`;
-      const mockMetadata = {
-        institution: { name: bank === 'chase' ? 'Chase' : 'Discover', institution_id: bank },
-        accounts: [
-          { id: `mock_acc_${bank}_checking`, name: `${bank === 'chase' ? 'Chase' : 'Discover'} Checking`, type: 'checking', subtype: 'checking', mask: Math.floor(1000 + Math.random() * 9000).toString() },
-          { id: `mock_acc_${bank}_savings`, name: `${bank === 'chase' ? 'Chase' : 'Discover'} Savings`, type: 'savings', subtype: 'savings', mask: Math.floor(1000 + Math.random() * 9000).toString() },
-        ],
-      };
-      onSuccess(mockPublicToken, mockMetadata);
-    }, 1500);
-  };
-  return { openPlaidLink, isReady: true }; // Simulate ready state
-};
-
-const BankItem: React.FC<{ name: string; iconUrl: string; dataAiHint: string; onSelect: () => void }> = ({ name, iconUrl, dataAiHint, onSelect }) => (
-  <Button variant="outline" className="w-full justify-start h-auto py-3 px-4" onClick={onSelect}>
-    <Image src={iconUrl} alt={`${name} logo`} width={32} height={32} className="mr-3 rounded" data-ai-hint={dataAiHint} />
-    Connect to {name}
-  </Button>
-);
 
 const AccountIcon: React.FC<{ type: Account['type'] }> = ({ type }) => {
   switch (type) {
@@ -59,33 +36,102 @@ const AccountIcon: React.FC<{ type: Account['type'] }> = ({ type }) => {
 };
 
 export default function AccountsPage() {
-  const [accounts, setAccounts] = useState<Account[]>(mockAccounts);
-  const [isLinkingBank, setIsLinkingBank] = useState(false);
+  const [accounts, setAccounts] = useState<Account[]>(mockAccounts); // Start with mock/manual accounts
+  const [isPlaidModalOpen, setIsPlaidModalOpen] = useState(false);
+  const [linkToken, setLinkToken] = useState<string | null>(null);
+  const [isFetchingLinkToken, setIsFetchingLinkToken] = useState(false);
   const { toast } = useToast();
 
-  const handlePlaidSuccess = async (publicToken: string, metadata: any) => {
-    setIsLinkingBank(false); // Close dialog
-    // Simulate token exchange and fetching account details
-    console.log('Plaid public token:', publicToken);
-    console.log('Plaid metadata:', metadata);
+  const getLinkToken = useCallback(async () => {
+    setIsFetchingLinkToken(true);
+    try {
+      const token = await createLinkToken();
+      if (token) {
+        setLinkToken(token);
+      } else {
+        toast({ title: "Error", description: "Could not initialize Plaid Link. Please try again.", variant: "destructive" });
+      }
+    } catch (error) {
+      toast({ title: "Error", description: "Failed to connect to Plaid service.", variant: "destructive" });
+      console.error("Error fetching link token:", error);
+    } finally {
+      setIsFetchingLinkToken(false);
+    }
+  }, [toast]);
 
-    // Create new mock accounts based on Plaid metadata
-    const newAccountsFromPlaid: Account[] = metadata.accounts.map((acc: any) => ({
-      id: `plaid_${acc.id}`,
-      name: acc.name,
-      bankName: metadata.institution.name === 'Chase' ? 'Chase' : 'Discover',
-      balance: Math.random() * 10000, // Random balance for mock
-      type: acc.type as Account['type'], // Assuming type matches
-      lastFour: acc.mask,
-    }));
+  useEffect(() => {
+    // Fetch link token when the component mounts or when the dialog is about to open
+    if (isPlaidModalOpen && !linkToken && !isFetchingLinkToken) {
+      getLinkToken();
+    }
+  }, [isPlaidModalOpen, linkToken, getLinkToken, isFetchingLinkToken]);
 
-    setAccounts(prev => [...prev, ...newAccountsFromPlaid]);
-    toast({ title: "Bank Linked!", description: `${metadata.institution.name} connected successfully.` });
+  const onSuccess = useCallback<PlaidLinkOnSuccess>(
+    async (publicToken, metadata) => {
+      setIsPlaidModalOpen(false); // Close dialog
+      toast({ title: "Processing...", description: "Securely linking your bank account." });
+      const response = await exchangePublicToken(publicToken, metadata);
+
+      if (response.error || !response.accounts) {
+        toast({ title: "Linking Failed", description: response.error || "Could not fetch account details.", variant: "destructive" });
+      } else {
+        // Add newly linked accounts, avoiding duplicates if any by ID
+        // This is a simple client-side merge; a real app would handle this more robustly with a backend
+        setAccounts(prev => {
+            const existingIds = new Set(prev.map(acc => acc.id));
+            const newUniqueAccounts = response.accounts!.filter(acc => !existingIds.has(acc.id));
+            return [...prev, ...newUniqueAccounts];
+        });
+        toast({ title: "Bank Linked!", description: `${metadata.institution?.name || 'Bank'} connected successfully.` });
+      }
+      setLinkToken(null); // Reset link token for next use
+    },
+    [toast]
+  );
+
+  const plaidConfig: PlaidLinkOptions = {
+    token: linkToken,
+    onSuccess,
+    onExit: (err, metadata) => {
+      console.log('Plaid Link exited.', err, metadata);
+      setIsPlaidModalOpen(false);
+      if (err) {
+        // toast({ title: "Plaid Link Closed", description: `Reason: ${err.display_message || err.error_message || 'Unknown error'}`, variant: "destructive" });
+      }
+       setLinkToken(null); // Reset link token
+    },
+    onEvent: (eventName, metadata) => {
+      console.log('Plaid Link event:', eventName, metadata);
+    }
+  };
+
+  const { open, ready, error } = usePlaidLink(plaidConfig);
+
+  useEffect(() => {
+    if (error) {
+      toast({ title: "Plaid Error", description: error.message, variant: "destructive" });
+      console.error("Plaid Link error state:", error);
+    }
+  }, [error, toast]);
+  
+  const handleOpenPlaid = () => {
+    if (!linkToken && !isFetchingLinkToken) {
+        getLinkToken(); // Fetch token if not already available
+    }
+    setIsPlaidModalOpen(true); // This will trigger useEffect to fetch token if needed
+    // The PlaidLink modal will open once 'ready' and 'linkToken' are available
   };
   
-  const { openPlaidLink, isReady } = usePlaidLink(handlePlaidSuccess);
+  useEffect(() => {
+    if (isPlaidModalOpen && ready && linkToken) {
+      open();
+    }
+  }, [isPlaidModalOpen, ready, linkToken, open]);
+
 
   const handleDeleteAccount = (accountId: string) => {
+    // In a real app, you might need to call an API to 'unlink' an item from Plaid
+    // or just remove it from your local datastore.
     setAccounts(prev => prev.filter(acc => acc.id !== accountId));
     toast({ title: "Account Unlinked", description: "The account has been removed.", variant: "destructive"});
   };
@@ -94,37 +140,25 @@ export default function AccountsPage() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-semibold font-headline">Linked Accounts</h1>
-        <Dialog open={isLinkingBank} onOpenChange={setIsLinkingBank}>
-          <DialogTrigger asChild>
-            <Button><PlusCircle className="mr-2 h-4 w-4" /> Link New Account</Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Link a New Bank Account</DialogTitle>
-              <DialogDescription>
-                Select your bank to securely connect your account using our trusted partner.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3 py-4">
-              <BankItem name="Chase" iconUrl="https://placehold.co/64x64.png" dataAiHint="Chase logo" onSelect={() => isReady && openPlaidLink('chase')} />
-              <BankItem name="Discover" iconUrl="https://placehold.co/64x64.png" dataAiHint="Discover logo" onSelect={() => isReady && openPlaidLink('discover')} />
-              {/* Add more banks or a search input here */}
-            </div>
-             <DialogModalFooter>
-                <Button variant="outline" onClick={() => setIsLinkingBank(false)}>Cancel</Button>
-            </DialogModalFooter>
-          </DialogContent>
-        </Dialog>
+        {/* The DialogTrigger for Plaid is now manual via Button onClick */}
+        <Button onClick={handleOpenPlaid} disabled={isFetchingLinkToken || (isPlaidModalOpen && !ready)}>
+          <PlusCircle className="mr-2 h-4 w-4" />
+          {isFetchingLinkToken ? "Initializing..." : "Link New Bank Account"}
+        </Button>
       </div>
+
+      {/* This Dialog is just a placeholder if PlaidLink opens its own modal */}
+      {/* We control Plaid Link opening via `open()` directly when conditions are met */}
+      {/* No actual Dialog component from shadcn is needed to *display* Plaid Link */}
 
       {accounts.length === 0 ? (
          <Card className="text-center py-10">
           <CardContent className="flex flex-col items-center gap-4">
             <Landmark className="h-16 w-16 text-muted-foreground" />
             <p className="text-muted-foreground">No accounts linked yet.</p>
-             <DialogTrigger asChild>
-                <Button onClick={() => setIsLinkingBank(true)}>Link Your First Account</Button>
-            </DialogTrigger>
+            <Button onClick={handleOpenPlaid} disabled={isFetchingLinkToken || (isPlaidModalOpen && !ready)}>
+                <PlusCircle className="mr-2 h-4 w-4" /> Link Your First Account
+            </Button>
           </CardContent>
         </Card>
       ) : (
@@ -145,6 +179,7 @@ export default function AccountsPage() {
                 </p>
               </CardContent>
               <CardFooter className="flex justify-end gap-2">
+                {/* Edit might be complex for Plaid-linked accounts, could be for manual accounts */}
                 {/* <Button variant="ghost" size="sm"><Edit className="h-4 w-4 mr-1" /> Edit</Button> */}
                 <Button variant="outline" size="sm" onClick={() => handleDeleteAccount(account.id)} className="text-destructive hover:text-destructive hover:border-destructive">
                   <Trash2 className="h-4 w-4 mr-1" /> Unlink
@@ -152,6 +187,15 @@ export default function AccountsPage() {
               </CardFooter>
             </Card>
           ))}
+        </div>
+      )}
+      {/* Button to re-fetch link token if needed, for debugging/testing */}
+      {isPlaidModalOpen && !linkToken && !isFetchingLinkToken && (
+         <div className="mt-4 text-center">
+            <p className="text-muted-foreground mb-2">Plaid Link initialization failed or token expired.</p>
+            <Button variant="outline" onClick={getLinkToken} disabled={isFetchingLinkToken}>
+                <RefreshCw className={`mr-2 h-4 w-4 ${isFetchingLinkToken ? 'animate-spin' : ''}`} /> Retry
+            </Button>
         </div>
       )}
     </div>
