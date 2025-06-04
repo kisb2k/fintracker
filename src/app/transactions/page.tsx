@@ -3,14 +3,13 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import type { ColumnDef } from "@tanstack/react-table";
-import { ArrowUpDown, Eye, Sparkles, UploadCloud } from "lucide-react";
+import { ArrowUpDown, Eye, Sparkles, UploadCloud, Trash2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DataTable } from "@/components/ui/data-table";
-// import { mockTransactions as initialMockTransactions, transactionCategories as allCategories, mockAccounts as initialMockAccounts } from '@/lib/mock-data';
 import { transactionCategories as allCategories } from '@/lib/mock-data';
 import type { Transaction, Account, CategorizedTransaction, TaxDeductionInfo } from "@/lib/types";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +20,17 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
   Form,
   FormControl,
   FormField,
@@ -30,6 +40,8 @@ import {
   FormDescription,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -55,7 +67,8 @@ import {
   addTransaction, 
   addTransactionsBatch,
   recalculateAndUpdateAccountBalance,
-  recalculateAllAccountBalances
+  recalculateAllAccountBalances,
+  removeDuplicateTransactions
 } from '@/lib/actions';
 
 const transactionFormSchema = z.object({
@@ -69,8 +82,10 @@ const transactionFormSchema = z.object({
 
 type TransactionFormData = z.infer<typeof transactionFormSchema>;
 
+type StatementType = "debit" | "credit";
+
 const AddTransactionForm: React.FC<{ 
-  onTransactionAdded: () => void; // Callback to refresh data
+  onTransactionAdded: () => void; 
   accounts: Account[];
 }> = ({ onTransactionAdded, accounts }) => {
   const { toast } = useToast();
@@ -98,7 +113,7 @@ const AddTransactionForm: React.FC<{
   const onSubmit = async (data: TransactionFormData) => {
     const newTransactionData: Omit<Transaction, 'id'> = {
       accountId: data.accountId,
-      date: new Date(data.date).toISOString(), // Ensure date is stored as ISO string
+      date: new Date(data.date).toISOString(), 
       description: data.description,
       amount: data.type === 'expense' ? -Math.abs(data.amount) : Math.abs(data.amount),
       category: data.category,
@@ -108,8 +123,8 @@ const AddTransactionForm: React.FC<{
     const result = await addTransaction(newTransactionData);
     if (result) {
       toast({ title: "Transaction Added", description: `${data.description} successfully added.` });
-      await recalculateAndUpdateAccountBalance(result.accountId); // Recalculate balance for the affected account
-      onTransactionAdded(); // Refresh data on the page
+      await recalculateAndUpdateAccountBalance(result.accountId); 
+      onTransactionAdded(); 
       form.reset({
           description: "",
           amount: 0,
@@ -329,11 +344,12 @@ const TransactionInsights: React.FC<{ transaction: Transaction }> = ({ transacti
 };
 
 const FileUploadCard: React.FC<{
-  onDataUploaded: () => void; // Callback to refresh data
+  onDataUploaded: () => void; 
   existingAccounts: Account[];
 }> = ({ onDataUploaded, existingAccounts }) => {
   const { toast } = useToast();
   const [isProcessing, setIsProcessing] = useState(false);
+  const [statementType, setStatementType] = useState<StatementType>("debit");
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -376,15 +392,14 @@ const FileUploadCard: React.FC<{
           headerLine.split(',').map(h => h.trim()), 
           dataLines, 
           mappingResult, 
-          existingAccounts
+          existingAccounts,
+          statementType // Pass statement type
         );
 
-        // Add new accounts to DB
         for (const accData of newAccountsToCreate) {
           await addAccount(accData);
         }
         
-        // Add transactions to DB
         if (parsedTransactions.length > 0) {
           const batchResult = await addTransactionsBatch(parsedTransactions);
           toast({ title: "File Processed", description: `${batchResult.successCount} of ${parsedTransactions.length} transactions loaded.` });
@@ -395,8 +410,8 @@ const FileUploadCard: React.FC<{
         } else {
             toast({ title: "No Transactions", description: "No transactions were parsed from the file." });
         }
-        await recalculateAllAccountBalances(); // Recalculate all account balances after batch import
-        onDataUploaded(); // Refresh data on the page
+        await recalculateAllAccountBalances(); 
+        onDataUploaded(); 
 
       } catch (error: any) {
         console.error("File processing error:", error);
@@ -418,13 +433,14 @@ const FileUploadCard: React.FC<{
     actualHeader: string[],
     dataLines: string[],
     mapping: MapCsvHeaderOutput,
-    currentAccounts: Account[]
+    currentAccounts: Account[],
+    selectedStatementType: StatementType
   ): { parsedTransactions: Omit<Transaction, 'id'>[], newAccountsToCreate: (Omit<Account, 'id' | 'balance'> & { id: string, balance?: number })[] } => {
     
     const transactions: Omit<Transaction, 'id'>[] = [];
     const newAccountsMap = new Map<string, Omit<Account, 'id' | 'balance'> & { id: string, balance?: number }>();
     const existingAccountMap = new Map(currentAccounts.map(acc => [acc.name.toLowerCase(), acc.id]));
-    let tempAccountIdCounter = Date.now(); // For generating temporary unique IDs for new accounts from CSV
+    let tempAccountIdCounter = Date.now();
 
     const columnIndexMap: Partial<Record<typeof REQUIRED_TRANSACTION_FIELDS[number], number>> = {};
     for (const requiredField of REQUIRED_TRANSACTION_FIELDS) {
@@ -445,7 +461,7 @@ const FileUploadCard: React.FC<{
       const line = dataLines[i];
       if (line.trim() === "") continue; 
 
-      const values = line.split(',').map(v => v.trim().replace(/^"|"$/g, '')); // Trim and remove surrounding quotes
+      const values = line.split(',').map(v => v.trim().replace(/^"|"$/g, '')); 
       if (values.length !== actualHeader.length) {
         console.warn(`Skipping malformed row ${i + 1}: column count mismatch. Expected ${actualHeader.length}, got ${values.length}. Line: "${line}"`);
         continue;
@@ -465,10 +481,10 @@ const FileUploadCard: React.FC<{
           const newTempId = `csv_acc_${tempAccountIdCounter++}`;
           if (!newAccountsMap.has(accountName.toLowerCase())) {
             newAccountsMap.set(accountName.toLowerCase(), {
-                id: newTempId, // This ID will be used for adding to DB
+                id: newTempId, 
                 name: accountName,
                 bankName: "Uploaded File", 
-                type: 'checking', // Default type
+                type: selectedStatementType === 'credit' ? 'credit card' : 'checking', 
             });
           }
           accountId = newAccountsMap.get(accountName.toLowerCase())!.id;
@@ -482,46 +498,49 @@ const FileUploadCard: React.FC<{
       let parsedDate = parse(dateStr, 'yyyy-MM-dd', new Date());
       if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'MM/dd/yyyy', new Date());
       if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'dd-MM-yyyy', new Date());
-      if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'M/d/yy', new Date()); // Common short format
+      if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'M/d/yy', new Date()); 
 
       if (!isValid(parsedDate)) {
           console.warn(`Skipping row ${i+1} due to invalid date format: ${dateStr}`);
           continue;
       }
 
-      let amount = getNumericValue(columnIndexMap.Amount);
-      if (isNaN(amount)) {
+      let rawCsvAmount = getNumericValue(columnIndexMap.Amount);
+      if (isNaN(rawCsvAmount)) {
           console.warn(`Skipping row ${i+1} due to invalid or missing amount. Value: "${values[columnIndexMap.Amount!]}"`);
           continue;
       }
 
-      let transactionType: "income" | "expense" = "expense"; 
-      const typeCsvColumn = mapping.Type;
-      const typeIndex = typeCsvColumn ? actualHeader.indexOf(typeCsvColumn) : -1;
-
-      if (typeIndex !== -1) {
-          const typeValue = getStringValue(typeIndex).toLowerCase();
-          if (typeValue.includes("income") || typeValue.includes("credit") || typeValue.includes("deposit")) {
-              transactionType = "income";
-          } else if (typeValue.includes("expense") || typeValue.includes("debit") || typeValue.includes("withdrawal") || typeValue.includes("payment")) {
-              transactionType = "expense";
-          }
-      } else {
-          if (amount > 0) transactionType = "income";
-          else if (amount < 0) transactionType = "expense";
+      let finalAmount: number;
+      if (selectedStatementType === 'credit') {
+        // For credit cards:
+        // Positive CSV amount (purchase) becomes negative (expense).
+        // Negative CSV amount (payment/refund) becomes positive (income/inflow).
+        finalAmount = -rawCsvAmount; 
+      } else { // 'debit'
+        // For debit/bank accounts:
+        // Positive CSV amount is income.
+        // Negative CSV amount is expense.
+        finalAmount = rawCsvAmount;
       }
       
-      amount = Math.abs(amount); 
+      const typeCsvColumn = mapping.Type;
+      const typeIndex = typeCsvColumn ? actualHeader.indexOf(typeCsvColumn) : -1;
+      let category = getStringValue(columnIndexMap.Category) || "Uncategorized";
 
-      const categoryCsvColumn = mapping.Category;
-      const categoryIndex = categoryCsvColumn ? actualHeader.indexOf(categoryCsvColumn) : -1;
-      const category = categoryIndex !== -1 ? getStringValue(categoryIndex) : "Uncategorized";
+      // If CSV has a 'Type' column (e.g. "DEBIT", "CREDIT"), it might inform category or be logged.
+      // For now, the finalAmount sign dictates income/expense for DB storage.
+      if (typeIndex !== -1) {
+          const typeValue = getStringValue(typeIndex).toLowerCase();
+          // You could add logic here if typeValue implies a category, e.g. if typeValue is "Interest" -> category = "Income"
+          // For now, we prioritize the 'Category' column if mapped, and finalAmount sign.
+      }
       
       transactions.push({
         accountId: accountId!,
         date: parsedDate.toISOString(),
         description: getStringValue(columnIndexMap.Description) || "N/A",
-        amount: transactionType === 'expense' ? -amount : amount,
+        amount: finalAmount,
         category: category,
         status: 'posted',
       });
@@ -537,12 +556,101 @@ const FileUploadCard: React.FC<{
           <UploadCloud className="mr-2 h-5 w-5" /> Upload Transactions (CSV)
         </CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        <div>
+          <Label className="text-sm font-medium">Statement Type</Label>
+          <RadioGroup
+            defaultValue="debit"
+            onValueChange={(value: string) => setStatementType(value as StatementType)}
+            className="flex gap-4 mt-1"
+          >
+            <div className="flex items-center space-x-2">
+              <RadioGroupItem value="debit" id="debit-type" />
+              <Label htmlFor="debit-type">Debit/Bank Account</Label>
+            </div>
+            <div className="flex items-center space-x-2">
+              <RadioGroupItem value="credit" id="credit-type" />
+              <Label htmlFor="credit-type">Credit Card</Label>
+            </div>
+          </RadioGroup>
+        </div>
         <Input type="file" accept=".csv" onChange={handleFileChange} disabled={isProcessing} />
         {isProcessing && <p className="text-sm text-muted-foreground mt-2">Processing file with AI...</p>}
         <p className="text-xs text-muted-foreground mt-2">
           The system will attempt to automatically map your CSV columns.
           Required concepts: Date, Description, Amount. Optional: Type (income/expense), Category, Account Name.
+        </p>
+      </CardContent>
+    </Card>
+  );
+};
+
+
+const DataManagementCard: React.FC<{ onDataUpdated: () => void }> = ({ onDataUpdated }) => {
+  const { toast } = useToast();
+  const [isRemovingDuplicates, setIsRemovingDuplicates] = useState(false);
+
+  const handleRemoveDuplicates = async () => {
+    setIsRemovingDuplicates(true);
+    try {
+      const result = await removeDuplicateTransactions();
+      if (result.success) {
+        toast({
+          title: "Duplicates Removed",
+          description: `${result.duplicatesRemoved} duplicate transaction(s) were removed.`,
+        });
+        onDataUpdated(); // Refresh data
+      } else {
+        toast({
+          title: "Error Removing Duplicates",
+          description: result.error || "An unexpected error occurred.",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error("Error removing duplicates:", error);
+      toast({
+        title: "Operation Failed",
+        description: "Could not remove duplicate transactions.",
+        variant: "destructive",
+      });
+    }
+    setIsRemovingDuplicates(false);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Data Management</CardTitle>
+        <CardDescription>Tools to help manage your transaction data.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button variant="outline" disabled={isRemovingDuplicates}>
+              <Trash2 className="mr-2 h-4 w-4" />
+              {isRemovingDuplicates ? "Removing..." : "Remove Duplicate Transactions"}
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This action will permanently remove duplicate transactions from your database.
+                Duplicates are identified by the same account, date, amount, and description.
+                This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={handleRemoveDuplicates} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                Yes, Remove Duplicates
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+        <p className="text-xs text-muted-foreground mt-2">
+          This action checks for transactions with the exact same account, date, amount, and description.
         </p>
       </CardContent>
     </Card>
@@ -666,6 +774,7 @@ export default function TransactionsPage() {
       <div className="space-y-6">
         <FileUploadCard onDataUploaded={fetchData} existingAccounts={accounts} />
         <AddTransactionForm onTransactionAdded={fetchData} accounts={accounts} />
+        <DataManagementCard onDataUpdated={fetchData} />
         <Card>
           <CardHeader>
             <CardTitle>Transaction History</CardTitle>
@@ -689,3 +798,4 @@ export default function TransactionsPage() {
     </Dialog>
   );
 }
+
