@@ -224,11 +224,9 @@ export default function BudgetsPage() {
           <CardContent className="flex flex-col items-center gap-4">
             <Target className="h-16 w-16 text-muted-foreground" />
             <p className="text-muted-foreground">No budgets created yet.</p>
-            <DialogTrigger asChild>
              <Button onClick={() => { setEditingBudget(undefined); setIsFormOpen(true); }}>
                 Create Your First Budget
               </Button>
-            </DialogTrigger>
           </CardContent>
         </Card>
       ) : (
