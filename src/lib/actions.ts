@@ -85,6 +85,9 @@ export async function addTransaction(transactionData: Omit<Transaction, 'id'>): 
       transactionData.status || 'posted'
     );
     const newTransaction = await db.get<Transaction>('SELECT * FROM transactions WHERE id = ?', id);
+    if (newTransaction) {
+      await recalculateAndUpdateAccountBalance(newTransaction.accountId);
+    }
     return newTransaction || null;
   } catch (error) {
     console.error('Failed to add transaction:', error);
@@ -96,8 +99,8 @@ export async function addTransactionsBatch(transactionsData: Omit<Transaction, '
   const db = await getDb();
   let successCount = 0;
   const errors: any[] = [];
+  const affectedAccountIds = new Set<string>();
 
-  // Use a transaction for batch inserts for performance and atomicity
   try {
     await db.exec('BEGIN TRANSACTION');
     const stmt = await db.prepare(
@@ -116,6 +119,7 @@ export async function addTransactionsBatch(transactionsData: Omit<Transaction, '
           txData.category,
           txData.status || 'posted'
         );
+        affectedAccountIds.add(txData.accountId);
         successCount++;
       } catch (error) {
         console.error('Failed to add transaction in batch item:', error, 'Data:', txData);
@@ -127,9 +131,12 @@ export async function addTransactionsBatch(transactionsData: Omit<Transaction, '
   } catch (batchError) {
     console.error('Batch transaction insert failed, rolling back:', batchError);
     await db.exec('ROLLBACK');
-    // Add a general error if the batch itself fails
     errors.push({ error: `Batch operation failed: ${(batchError as Error).message}` });
-    successCount = 0; // Reset success count as the batch failed
+    successCount = 0; 
+  }
+  
+  for (const accountId of affectedAccountIds) {
+    await recalculateAndUpdateAccountBalance(accountId);
   }
   
   return { successCount, errors };
@@ -192,10 +199,6 @@ export async function recalculateAllAccountBalances(): Promise<void> {
 export async function removeDuplicateTransactions(): Promise<{ success: boolean; duplicatesRemoved?: number; error?: string }> {
   const db = await getDb();
   try {
-    // Identify IDs of duplicate rows to keep (the one with the minimum ID for each group)
-    // Then delete rows whose IDs are NOT in this set of minimum IDs but belong to a duplicate group.
-    
-    // Step 1: Find all IDs of rows that are part of a duplicate set
     const duplicateGroupIds = await db.all<{ id: string }>(`
       SELECT T1.id
       FROM transactions T1
@@ -214,17 +217,6 @@ export async function removeDuplicateTransactions(): Promise<{ success: boolean;
       return { success: true, duplicatesRemoved: 0 };
     }
 
-    // Step 2: From these, identify the specific IDs to delete (all except the one with MIN(id) in each group)
-    const idsToDelete = await db.all<{ id: string }>(`
-      SELECT id FROM transactions
-      WHERE id IN (SELECT id FROM (${duplicateGroupIds.map(row => `'${row.id}'`).join(',')})) -- Placeholder for actual IDs, construct properly
-      AND id NOT IN (
-          SELECT MIN(id)
-          FROM transactions
-          GROUP BY accountId, date(date), amount, description
-      )
-    `);
-    // Constructing the IN clause properly for the subquery
     const duplicateIdList = duplicateGroupIds.map(row => `'${row.id}'`).join(',');
     const queryForIdsToDelete = `
         SELECT id 
@@ -238,7 +230,6 @@ export async function removeDuplicateTransactions(): Promise<{ success: boolean;
     `;
     const rowsToDelete = await db.all<{ id: string }>(queryForIdsToDelete);
 
-
     if (rowsToDelete.length === 0) {
       return { success: true, duplicatesRemoved: 0 };
     }
@@ -249,13 +240,71 @@ export async function removeDuplicateTransactions(): Promise<{ success: boolean;
     const numRemoved = deleteResult.changes || 0;
     console.log(`Removed ${numRemoved} duplicate transactions.`);
     
-    // After removing duplicates, recalculate all account balances
     await recalculateAllAccountBalances();
 
     return { success: true, duplicatesRemoved: numRemoved };
 
   } catch (error: any) {
     console.error('Failed to remove duplicate transactions:', error);
+    return { success: false, error: error.message || 'Unknown error occurred' };
+  }
+}
+
+export async function deleteTransaction(transactionId: string): Promise<{ success: boolean; error?: string }> {
+  const db = await getDb();
+  try {
+    const transaction = await db.get<Transaction>('SELECT accountId FROM transactions WHERE id = ?', transactionId);
+    if (!transaction) {
+      return { success: false, error: 'Transaction not found' };
+    }
+    
+    const result = await db.run('DELETE FROM transactions WHERE id = ?', transactionId);
+    if (result.changes && result.changes > 0) {
+      await recalculateAndUpdateAccountBalance(transaction.accountId);
+      return { success: true };
+    }
+    return { success: false, error: 'Failed to delete transaction or transaction not found' };
+  } catch (error: any) {
+    console.error('Failed to delete transaction:', error);
+    return { success: false, error: error.message || 'Unknown error occurred' };
+  }
+}
+
+export async function deleteTransactionsBatch(transactionIds: string[]): Promise<{ success: boolean; count?: number; error?: string }> {
+  if (transactionIds.length === 0) {
+    return { success: true, count: 0 };
+  }
+  const db = await getDb();
+  try {
+    // Get affected account IDs before deleting
+    const placeholders = transactionIds.map(() => '?').join(',');
+    const transactions = await db.all<Transaction>(`SELECT DISTINCT accountId FROM transactions WHERE id IN (${placeholders})`, ...transactionIds);
+    const affectedAccountIds = new Set(transactions.map(t => t.accountId));
+
+    const result = await db.run(`DELETE FROM transactions WHERE id IN (${placeholders})`, ...transactionIds);
+    
+    for (const accountId of affectedAccountIds) {
+      await recalculateAndUpdateAccountBalance(accountId);
+    }
+    
+    return { success: true, count: result.changes || 0 };
+  } catch (error: any) {
+    console.error('Failed to delete transactions batch:', error);
+    return { success: false, error: error.message || 'Unknown error occurred' };
+  }
+}
+
+export async function updateTransactionCategoryBatch(transactionIds: string[], newCategory: string): Promise<{ success: boolean; count?: number; error?: string }> {
+  if (transactionIds.length === 0) {
+    return { success: true, count: 0 };
+  }
+  const db = await getDb();
+  try {
+    const placeholders = transactionIds.map(() => '?').join(',');
+    const result = await db.run(`UPDATE transactions SET category = ? WHERE id IN (${placeholders})`, newCategory, ...transactionIds);
+    return { success: true, count: result.changes || 0 };
+  } catch (error: any) {
+    console.error('Failed to update transaction categories batch:', error);
     return { success: false, error: error.message || 'Unknown error occurred' };
   }
 }
