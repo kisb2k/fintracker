@@ -136,7 +136,6 @@ const AddTransactionFormDialog: React.FC<{
     const result = await addTransaction(newTransactionData);
     if (result) {
       toast({ title: "Transaction Added", description: `${data.description} successfully added.` });
-      // Recalculation handled in addTransaction server action
       onTransactionAdded(); 
       form.reset({
           description: "",
@@ -146,7 +145,7 @@ const AddTransactionFormDialog: React.FC<{
           accountId: accounts[0]?.id || "",
           type: "expense",
       });
-      onOpenChange(false); // Close dialog
+      onOpenChange(false); 
     } else {
       toast({ title: "Error", description: "Failed to add transaction.", variant: "destructive" });
     }
@@ -271,7 +270,6 @@ const TransactionInsightsDialog: React.FC<{
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Reset state when dialog opens with a new transaction or closes
     if (isOpen && transaction) {
         setCategoryResult(null);
         setTaxResult(null);
@@ -440,9 +438,8 @@ const FileUploadDialog: React.FC<{
         } else {
             toast({ title: "No Transactions", description: "No transactions were parsed from the file." });
         }
-        // Balance recalculation handled in addTransactionsBatch
         onDataUploaded(); 
-        onOpenChange(false); // Close dialog
+        onOpenChange(false); 
 
       } catch (error: any) {
         console.error("File processing error:", error);
@@ -620,7 +617,7 @@ const DataManagementDialog: React.FC<{
 
   const handleRemoveDuplicates = async () => {
     setIsRemovingDuplicates(true);
-    setIsConfirmRemoveOpen(false); // Close confirmation dialog
+    setIsConfirmRemoveOpen(false); 
     try {
       const result = await removeDuplicateTransactions();
       if (result.success) {
@@ -628,8 +625,8 @@ const DataManagementDialog: React.FC<{
           title: "Duplicates Removed",
           description: `${result.duplicatesRemoved} duplicate transaction(s) were removed.`,
         });
-        onDataUpdated(); // Refresh data
-        onOpenChange(false); // Close main dialog
+        onDataUpdated(); 
+        onOpenChange(false); 
       } else {
         toast({
           title: "Error Removing Duplicates",
@@ -776,7 +773,7 @@ export default function TransactionsPage() {
     ]);
     setAccounts(dbAccounts);
     setTransactions(dbTransactions);
-    setRowSelection({}); // Clear selection on data refresh
+    setRowSelection({}); 
     setIsLoading(false);
   }, []);
 
@@ -798,28 +795,32 @@ export default function TransactionsPage() {
     const result = await deleteTransactionAction(transactionToDeleteId);
     if (result.success) {
       toast({ title: "Transaction Deleted", description: "The transaction has been removed." });
-      fetchData(); // Refresh data
+      fetchData(); 
     } else {
       toast({ title: "Error Deleting", description: result.error || "Could not delete transaction.", variant: "destructive" });
     }
-    setTransactionToDeleteId(null); // Close confirmation
+    setTransactionToDeleteId(null); 
   };
   
   const handleBulkDelete = async () => {
-    const idsToDelete = transactions.filter(t => rowSelection[t.id]).map(t => t.id);
-    if (idsToDelete.length === 0) {
-        toast({ title: "No transactions selected", variant: "destructive" });
-        setTransactionToDeleteId(null); // Close confirmation (as it's reused)
-        return;
+    if (selectedTransactionIds.length === 0) {
+      toast({
+        title: "No Transactions Selected",
+        description: "Please select transactions to delete.",
+        variant: "destructive"
+      });
+      setTransactionToDeleteId(null); 
+      return;
     }
-    const result = await deleteTransactionsBatchAction(idsToDelete);
+  
+    const result = await deleteTransactionsBatchAction(selectedTransactionIds);
     if (result.success) {
-        toast({ title: "Bulk Delete Successful", description: `${result.count} transactions deleted.` });
-        fetchData();
+      toast({ title: "Bulk Delete Successful", description: `${result.count} transactions deleted.` });
+      fetchData(); 
     } else {
-        toast({ title: "Bulk Delete Failed", description: result.error || "Could not delete transactions.", variant: "destructive" });
+      toast({ title: "Bulk Delete Failed", description: result.error || "Could not delete selected transactions.", variant: "destructive" });
     }
-    setTransactionToDeleteId(null); // Close confirmation dialog
+    setTransactionToDeleteId(null); 
   };
 
 
@@ -927,7 +928,7 @@ export default function TransactionsPage() {
     return <div className="flex justify-center items-center h-64"><p>Loading data...</p></div>;
   }
 
-  const numSelected = Object.keys(rowSelection).filter(key => rowSelection[key]).length;
+  const numSelected = selectedTransactionIds.length;
 
 
   return (
@@ -949,7 +950,7 @@ export default function TransactionsPage() {
             <Button variant="outline" onClick={() => setIsBulkCategoryUpdateOpen(true)}>
               <Edit3 className="mr-2 h-4 w-4" /> Update Category ({numSelected})
             </Button>
-            <Button variant="destructive" onClick={() => setTransactionToDeleteId('bulk')}> {/* Use 'bulk' to signify bulk delete confirm */}
+            <Button variant="destructive" onClick={() => setTransactionToDeleteId('bulk')}> 
               <Trash2 className="mr-2 h-4 w-4" /> Delete Selected ({numSelected})
             </Button>
           </div>
@@ -981,7 +982,7 @@ export default function TransactionsPage() {
       <BulkCategoryUpdateDialog
         isOpen={isBulkCategoryUpdateOpen}
         onOpenChange={setIsBulkCategoryUpdateOpen}
-        selectedTransactionIds={transactions.filter(t => rowSelection[t.id]).map(t => t.id)}
+        selectedTransactionIds={selectedTransactionIds}
         onUpdateComplete={fetchData}
       />
       
@@ -1032,5 +1033,3 @@ export default function TransactionsPage() {
     </div>
   );
 }
-
-    
