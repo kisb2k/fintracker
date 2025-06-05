@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription }
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Label } from "@/components/ui/label"; // Changed from RHFFormLabel
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -37,9 +37,6 @@ import {
   startOfQuarter, endOfQuarter,
   startOfYear, endOfYear,
   isBefore, isAfter,
-  differenceInCalendarMonths,
-  differenceInCalendarWeeks,
-  differenceInCalendarYears
 } from 'date-fns';
 import { PlusCircle, Edit, Trash2, Target, GripVertical, ListFilter, CalendarDays, X } from 'lucide-react';
 import { useForm, Controller, useFieldArray } from "react-hook-form";
@@ -56,7 +53,7 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
-  AlertDialogTitle as RAlertDialogTitle, // Renamed to avoid conflict
+  AlertDialogTitle as RAlertDialogTitle, 
 } from "@/components/ui/alert-dialog";
 
 
@@ -71,7 +68,7 @@ const budgetFormSchema = z.object({
   name: z.string().min(1, "Budget name is required"),
   categoriesAndLimits: z.array(budgetCategoryLimitSchema).min(1, "At least one category with a limit is required"),
   isRecurring: z.boolean().optional(),
-  recurrenceFrequency: z.string().nullable().optional(), // Can be null if not recurring
+  recurrenceFrequency: z.string().nullable().optional(), 
   formStartDate: z.string().refine((val) => isValid(parseISO(val)), { message: "Start date is required and must be valid" }),
   formEndDate: z.string().refine((val) => isValid(parseISO(val)), { message: "End date is required and must be valid" }),
 }).refine(data => {
@@ -87,13 +84,12 @@ const budgetFormSchema = z.object({
   path: ["formEndDate"],
 });
 
-// Use BudgetUpsertData for form data type to align with server action
 type BudgetFormData = BudgetUpsertData;
 
 
 interface BudgetFormProps {
   onSubmitBudget: (data: BudgetFormData, id?: string) => Promise<void>;
-  initialData?: Budget; // This will be a full Budget object from DB
+  initialData?: Budget; 
   onClose: () => void;
   availableCategories: string[];
   openAddCategoryDialog: () => void; 
@@ -108,7 +104,7 @@ const BudgetForm: React.FC<BudgetFormProps> = ({ onSubmitBudget, initialData, on
       isRecurring: initialData.isRecurring || false,
       recurrenceFrequency: initialData.recurrenceFrequency || null,
       formStartDate: format(parseISO(initialData.originalStartDate || initialData.startDate), 'yyyy-MM-dd'),
-      formEndDate: format(parseISO(initialData.endDate), 'yyyy-MM-dd'), // For recurring, this is end of first period
+      formEndDate: format(parseISO(initialData.endDate), 'yyyy-MM-dd'),
     } : {
       name: "",
       categoriesAndLimits: [],
@@ -128,8 +124,8 @@ const BudgetForm: React.FC<BudgetFormProps> = ({ onSubmitBudget, initialData, on
 
   const handleAddCategoryToBudget = () => {
     if (selectedCategoryForNewLimit && !fields.find(f => f.category === selectedCategoryForNewLimit)) {
-      append({ category: selectedCategoryForNewLimit, limit: 100 }); // Default limit
-      setSelectedCategoryForNewLimit(""); // Reset selector
+      append({ category: selectedCategoryForNewLimit, limit: 100 }); 
+      setSelectedCategoryForNewLimit(""); 
     }
   };
   
@@ -164,20 +160,31 @@ const BudgetForm: React.FC<BudgetFormProps> = ({ onSubmitBudget, initialData, on
           </Button>
         </div>
         <ScrollArea className="h-40 w-full rounded-md border p-2 space-y-2">
-          {fields.map((field, index) => (
-            <div key={field.id} className="flex items-center gap-2 p-1 border rounded">
-              <span className="font-medium text-sm flex-1">{field.category}</span>
+          {fields.map((fieldItem, index) => (
+            <div key={fieldItem.id} className="flex items-center gap-2 p-1 border rounded">
+              <span className="font-medium text-sm flex-1">{fieldItem.category}</span>
               <Controller
                 control={form.control}
                 name={`categoriesAndLimits.${index}.limit`}
-                render={({ field: limitField }) => (
-                  <Input 
-                    type="number" 
-                    step="0.01" 
-                    placeholder="Limit" 
-                    className="w-24 h-8 text-sm" 
-                    {...limitField} 
-                    onChange={e => limitField.onChange(parseFloat(e.target.value))}
+                render={({ field }) => (
+                  <Input
+                    type="number"
+                    step="0.01"
+                    placeholder="Limit"
+                    className="w-24 h-8 text-sm"
+                    name={field.name}
+                    onBlur={field.onBlur}
+                    ref={field.ref}
+                    value={(typeof field.value === 'number' && isNaN(field.value)) || field.value === undefined ? '' : field.value}
+                    onChange={e => {
+                      const stringValue = e.target.value;
+                      if (stringValue === '') {
+                        field.onChange(undefined); 
+                      } else {
+                        const numValue = parseFloat(stringValue);
+                        field.onChange(isNaN(numValue) ? undefined : numValue);
+                      }
+                    }}
                   />
                 )}
               />
@@ -383,9 +390,7 @@ export default function BudgetsPage() {
             nameFmt = "'Week of' MMM dd, yyyy ('W'ww)";
             break;
         case 'biweekly':
-            // This logic needs careful handling to define consistent bi-weekly periods
-            // For simplicity, let's assume bi-weekly starts on the originalStartDate and lasts 2 weeks
-            periodStart = startDate; // The provided start date IS the start of this bi-week period
+            periodStart = startDate; 
             periodEnd = endOfDay(addDays(addWeeks(startDate, 2), -1));
             nameFmt = "'Bi-Week' MMM dd, yyyy";
             break;
@@ -404,7 +409,7 @@ export default function BudgetsPage() {
             periodEnd = endOfYear(startDate);
             nameFmt = "yyyy";
             break;
-        default: // Should not happen if freq is validated
+        default: 
             periodStart = startOfMonth(startDate);
             periodEnd = endOfMonth(startDate);
             nameFmt = "MMMM yyyy";
@@ -421,9 +426,8 @@ export default function BudgetsPage() {
     const today = new Date();
     
     if (!budget.isRecurring || !budget.originalStartDate) {
-        // Non-recurring budget: use its defined start and end
         if (budget.originalStartDate && budget.endDate) {
-             const { periodName } = getPeriodBoundaries(parseISO(budget.originalStartDate), budget.recurrenceFrequency || 'monthly'); // Freq is fallback
+             const { periodName } = getPeriodBoundaries(parseISO(budget.originalStartDate), budget.recurrenceFrequency || 'monthly'); 
              return [{ name: periodName, startDate: budget.originalStartDate, endDate: budget.endDate }];
         }
         return [];
@@ -433,8 +437,6 @@ export default function BudgetsPage() {
     if(!isValid(originalStartDateParsed) || !budget.recurrenceFrequency) return [];
 
     let currentSeedDate = originalStartDateParsed;
-    // Find the period that contains today or is the closest past/future if today is outside all generated periods.
-    // Iterate forward from originalStartDate until currentSeedDate's period END is after today
     while(isValid(currentSeedDate) && isBefore(getPeriodBoundaries(currentSeedDate, budget.recurrenceFrequency).periodEnd, today)) {
         switch (budget.recurrenceFrequency) {
             case 'weekly': currentSeedDate = addWeeks(currentSeedDate, 1); break;
@@ -443,18 +445,16 @@ export default function BudgetsPage() {
             case 'quarterly': currentSeedDate = addMonths(currentSeedDate, 3); break;
             case 'annually': currentSeedDate = addYears(currentSeedDate, 1); break;
         }
-        if (isAfter(currentSeedDate, addYears(today, 10))) break; // Safety break
+        if (isAfter(currentSeedDate, addYears(today, 10))) break; 
     }
 
 
-    // Generate past periods
     let tempDateForPast = currentSeedDate;
     for (let i = 0; i < numPast; i++) {
         const { periodStart, periodEnd, periodName } = getPeriodBoundaries(tempDateForPast, budget.recurrenceFrequency);
         if (isAfter(periodStart, originalStartDateParsed) || periodStart.getTime() === originalStartDateParsed.getTime()) {
              periods.unshift({ name: periodName, startDate: formatISO(periodStart), endDate: formatISO(periodEnd) });
         } else if (i === 0 && periodStart.getTime() < originalStartDateParsed.getTime() && periodEnd.getTime() >= originalStartDateParsed.getTime()) {
-            // If the current period starts before original start but ends after/on it (first period case)
             periods.unshift({ name: periodName, startDate: formatISO(originalStartDateParsed), endDate: formatISO(periodEnd) });
         }
 
@@ -469,12 +469,11 @@ export default function BudgetsPage() {
             default: prevTempDate = tempDateForPast; 
         }
         if (isBefore(prevTempDate, originalStartDateParsed) && getPeriodBoundaries(prevTempDate, budget.recurrenceFrequency).periodEnd < originalStartDateParsed) break;
-        if (prevTempDate.getTime() === tempDateForPast.getTime() && tempDateForPast.getTime() !== originalStartDateParsed.getTime()) break; // stuck
+        if (prevTempDate.getTime() === tempDateForPast.getTime() && tempDateForPast.getTime() !== originalStartDateParsed.getTime()) break; 
         tempDateForPast = prevTempDate;
-         if (isBefore(tempDateForPast, subYears(today, 10))) break; // Safety break
+         if (isBefore(tempDateForPast, subYears(today, 10))) break; 
     }
     
-    // Ensure the currentSeedDate period itself is added if not already by past loop
     const currentSeedPeriodDetails = getPeriodBoundaries(currentSeedDate, budget.recurrenceFrequency);
     if (!periods.find(p => p.startDate === formatISO(currentSeedPeriodDetails.periodStart))) {
         const insertIndex = periods.findIndex(p => parseISO(p.startDate) > currentSeedPeriodDetails.periodStart);
@@ -483,10 +482,7 @@ export default function BudgetsPage() {
         else periods.splice(insertIndex, 0, periodToAdd);
     }
 
-
-    // Generate future periods
     let tempDateForFuture = currentSeedDate;
-     // If currentSeedDate is in the past relative to today, advance it for future generation
     if (isBefore(getPeriodBoundaries(tempDateForFuture, budget.recurrenceFrequency).periodEnd, today)) {
          switch (budget.recurrenceFrequency) {
             case 'weekly': tempDateForFuture = addWeeks(tempDateForFuture, 1); break;
@@ -499,10 +495,9 @@ export default function BudgetsPage() {
 
 
     for (let i = 0; i < numFuture; i++) {
-         // If this is the first future period being generated, and it's not the 'currentSeedPeriod'
         if (i > 0 || formatISO(getPeriodBoundaries(tempDateForFuture, budget.recurrenceFrequency).periodStart) !== currentSeedPeriodDetails.startDate) {
             const { periodStart, periodEnd, periodName } = getPeriodBoundaries(tempDateForFuture, budget.recurrenceFrequency);
-             if (!periods.find(p => p.startDate === formatISO(periodStart))) { // Avoid duplicates if currentSeedDate was future
+             if (!periods.find(p => p.startDate === formatISO(periodStart))) { 
                 periods.push({ name: periodName, startDate: formatISO(periodStart), endDate: formatISO(periodEnd) });
             }
         }
@@ -516,9 +511,9 @@ export default function BudgetsPage() {
             case 'annually': nextTempDate = addYears(tempDateForFuture, 1); break;
             default: nextTempDate = tempDateForFuture;
         }
-        if (nextTempDate.getTime() === tempDateForFuture.getTime()) break; // stuck
+        if (nextTempDate.getTime() === tempDateForFuture.getTime()) break; 
         tempDateForFuture = nextTempDate;
-         if (isAfter(tempDateForFuture, addYears(today, 10))) break; // Safety break
+         if (isAfter(tempDateForFuture, addYears(today, 10))) break; 
     }
     
     const uniquePeriodsMap = new Map<string, { name: string; startDate: string; endDate: string }>();
@@ -573,12 +568,11 @@ export default function BudgetsPage() {
 
 
   const handleBudgetSubmit = async (data: BudgetFormData, id?: string) => {
-    // The 'data' is already BudgetUpsertData from the form
     if (id) { 
       const result = await updateBudget(id, data);
       if (result.budget) {
         toast({ title: "Budget Updated", description: `${result.budget.name} has been updated.`});
-        fetchBudgetData(); // Re-fetch all budgets
+        fetchBudgetData(); 
       } else {
         toast({ title: "Error", description: result.error || "Failed to update budget.", variant: "destructive" });
       }
@@ -586,8 +580,8 @@ export default function BudgetsPage() {
       const result = await addBudget(data);
        if (result.budget) {
         toast({ title: "Budget Created", description: `${result.budget.name} has been created.`});
-        fetchBudgetData(); // Re-fetch all budgets
-        setSelectedBudgetId(result.budget.id); // Select the newly created budget
+        fetchBudgetData(); 
+        setSelectedBudgetId(result.budget.id); 
       } else {
         toast({ title: "Error", description: result.error || "Failed to create budget.", variant: "destructive" });
       }
@@ -606,9 +600,9 @@ export default function BudgetsPage() {
     const result = await deleteBudgetAction(deletingBudgetId);
     if (result.success) {
         toast({ title: "Budget Deleted", description: "The budget has been removed." });
-        fetchBudgetData(); // Re-fetch
+        fetchBudgetData(); 
         if (selectedBudgetId === deletingBudgetId) {
-            setSelectedBudgetId(null); // Deselect if current one was deleted
+            setSelectedBudgetId(null); 
         }
     } else {
         toast({ title: "Error Deleting Budget", description: result.error || "Could not delete the budget.", variant: "destructive" });
@@ -787,7 +781,7 @@ export default function BudgetsPage() {
                 <h4 className="text-md font-semibold mb-2">Spending by Category:</h4>
                 <div className="space-y-3">
                     {Object.entries(viewedPeriodDetails.categorySpending)
-                      .sort(([catA], [catB]) => catA.localeCompare(catB)) // Sort alphabetically
+                      .sort(([catA], [catB]) => catA.localeCompare(catB)) 
                       .map(([category, data]) => {
                         const progress = data.limit > 0 ? Math.min((data.spent / data.limit) * 100, 100) : 0;
                         const remaining = data.limit - data.spent;
@@ -858,4 +852,5 @@ export default function BudgetsPage() {
     </div>
   );
 }
+
 
