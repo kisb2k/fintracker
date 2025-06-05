@@ -448,12 +448,12 @@ export async function addBudget(data: BudgetUpsertData): Promise<{ budget: Budge
     );
     for (const catLimit of data.categoriesAndLimits) {
       const catLimitId = crypto.randomUUID();
-      await stmt.run(catLimitId, budgetId, catLimit.category, catLimit.limit);
+      await stmt.run(catLimitId, budgetId, catLimit.category, catLimit.amountLimit); // Use amountLimit
     }
     await stmt.finalize();
     await db.exec('COMMIT');
 
-    return getBudgetById(budgetId); // Fetch the newly created budget with its details
+    return getBudgetById(budgetId); 
   } catch (error: any) {
     await db.exec('ROLLBACK');
     console.error('Failed to add budget:', error);
@@ -481,30 +481,34 @@ export async function getBudgets(): Promise<Budget[]> {
 
     const budgets: Budget[] = [];
     for (const row of budgetRows) {
-      const categoryLimits = await db.all<BudgetCategoryLimit>(
-        'SELECT category_name as category, limit_amount as limit FROM budget_category_limits WHERE budget_id = ?',
+      const categoryLimitsRaw = await db.all<{ category: string; amountLimit: number }>( // Expect amountLimit
+        'SELECT category_name as category, limit_amount as amountLimit FROM budget_category_limits WHERE budget_id = ?', // Alias to amountLimit
         row.id
       );
+      
+      const categoryLimits: BudgetCategoryLimit[] = categoryLimitsRaw.map(raw => ({
+          category: raw.category,
+          amountLimit: raw.amountLimit
+      }));
 
-      // Determine startDate and endDate for the Budget type (which represents the current/first period)
+
       let displayStartDate: string;
       let displayEndDate: string;
       const originalStartDateParsed = parseISO(row.originalStartDate);
 
       if (row.isRecurring) {
-        displayStartDate = row.originalStartDate; // This is the anchor for period generation
-        // End date of the first period for recurring budgets
+        displayStartDate = row.originalStartDate; 
         switch (row.recurrenceFrequency) {
             case 'weekly': displayEndDate = formatISO(endOfWeek(originalStartDateParsed, { weekStartsOn: 1 })); break;
             case 'biweekly': displayEndDate = formatISO(endOfDay(addWeeks(originalStartDateParsed, 2))); break;
             case 'monthly': displayEndDate = formatISO(endOfMonth(originalStartDateParsed)); break;
             case 'quarterly': displayEndDate = formatISO(endOfQuarter(originalStartDateParsed)); break;
             case 'annually': displayEndDate = formatISO(endOfYear(originalStartDateParsed)); break;
-            default: displayEndDate = formatISO(endOfMonth(originalStartDateParsed)); // Fallback
+            default: displayEndDate = formatISO(endOfMonth(originalStartDateParsed)); 
         }
       } else {
         displayStartDate = row.originalStartDate;
-        displayEndDate = row.formDefinedEndDate; // Use the stored end date for non-recurring
+        displayEndDate = row.formDefinedEndDate; 
       }
       
       budgets.push({
@@ -513,9 +517,9 @@ export async function getBudgets(): Promise<Budget[]> {
         categories: categoryLimits,
         isRecurring: !!row.isRecurring,
         recurrenceFrequency: row.recurrenceFrequency,
-        originalStartDate: row.originalStartDate, // This is the series start or non-recurring start
-        startDate: displayStartDate, // For display/initial period
-        endDate: displayEndDate,     // For display/initial period
+        originalStartDate: row.originalStartDate, 
+        startDate: displayStartDate, 
+        endDate: displayEndDate,     
       });
     }
     return budgets;
@@ -544,10 +548,14 @@ export async function getBudgetById(budgetId: string): Promise<{ budget: Budget 
       return { budget: null, error: 'Budget not found.' };
     }
 
-    const categoryLimits = await db.all<BudgetCategoryLimit>(
-      'SELECT category_name as category, limit_amount as limit FROM budget_category_limits WHERE budget_id = ?',
+    const categoryLimitsRaw = await db.all<{ category: string; amountLimit: number }>( // Expect amountLimit
+      'SELECT category_name as category, limit_amount as amountLimit FROM budget_category_limits WHERE budget_id = ?', // Alias to amountLimit
       row.id
     );
+    const categoryLimits: BudgetCategoryLimit[] = categoryLimitsRaw.map(raw => ({
+        category: raw.category,
+        amountLimit: raw.amountLimit
+    }));
     
     let displayStartDate: string;
     let displayEndDate: string;
@@ -595,7 +603,6 @@ export async function updateBudget(id: string, data: BudgetUpsertData): Promise<
   try {
     await db.exec('BEGIN TRANSACTION');
 
-    // Check for name uniqueness if name is changing
     const currentBudget = await db.get('SELECT name FROM budgets WHERE id = ?', id);
     if (data.name !== currentBudget?.name) {
         const existingBudget = await db.get('SELECT id FROM budgets WHERE name = ? AND id != ?', data.name, id);
@@ -615,16 +622,14 @@ export async function updateBudget(id: string, data: BudgetUpsertData): Promise<
       id
     );
 
-    // Clear existing category limits for this budget
     await db.run('DELETE FROM budget_category_limits WHERE budget_id = ?', id);
 
-    // Add new category limits
     const stmt = await db.prepare(
       'INSERT INTO budget_category_limits (id, budget_id, category_name, limit_amount) VALUES (?, ?, ?, ?)'
     );
     for (const catLimit of data.categoriesAndLimits) {
       const catLimitId = crypto.randomUUID();
-      await stmt.run(catLimitId, id, catLimit.category, catLimit.limit);
+      await stmt.run(catLimitId, id, catLimit.category, catLimit.amountLimit); // Use amountLimit
     }
     await stmt.finalize();
     await db.exec('COMMIT');
@@ -643,7 +648,6 @@ export async function updateBudget(id: string, data: BudgetUpsertData): Promise<
 export async function deleteBudget(id: string): Promise<{ success: boolean; error?: string }> {
   const db = await getDb();
   try {
-    // Cascading delete will handle budget_category_limits
     const result = await db.run('DELETE FROM budgets WHERE id = ?', id);
     if (result.changes && result.changes > 0) {
       return { success: true };
@@ -654,3 +658,4 @@ export async function deleteBudget(id: string): Promise<{ success: boolean; erro
     return { success: false, error: error.message || 'Failed to delete budget.' };
   }
 }
+

@@ -24,7 +24,7 @@ export type BudgetRecurrenceFrequency = 'weekly' | 'biweekly' | 'monthly' | 'qua
 
 export interface BudgetCategoryLimit {
   category: string;
-  limit: number;
+  amountLimit: number; // Renamed from limit
 }
 
 export type Budget = {
@@ -32,29 +32,22 @@ export type Budget = {
   name: string;
   categories: BudgetCategoryLimit[]; // Array of objects with category and its limit
   
-  // These represent the definition of the budget's timing
-  startDate: string; // For non-recurring, this is THE start date. For recurring, this might be the original start or a calculated current period start for display.
-  endDate: string;   // For non-recurring, this is THE end date. For recurring, this is the original end of the first period or calculated current period end.
+  startDate: string; 
+  endDate: string;   
 
   isRecurring?: boolean;
   recurrenceFrequency?: BudgetRecurrenceFrequency | null;
-  originalStartDate?: string | null; // The very first start date of a recurring series
-
-  // 'spent' will be calculated on the frontend for the viewed period
-  // 'overallLimit' will be calculated on the frontend as sum of category limits
+  originalStartDate?: string | null; 
 };
 
 // Data structure for creating/updating budgets via forms/actions
 export interface BudgetUpsertData {
   name: string;
-  categoriesAndLimits: BudgetCategoryLimit[];
+  categoriesAndLimits: BudgetCategoryLimit[]; // Uses updated BudgetCategoryLimit
   isRecurring: boolean;
   recurrenceFrequency: BudgetRecurrenceFrequency | null;
-  originalStartDate: string | null; // ISO string
-  // For non-recurring, startDate and endDate from the form will map to originalStartDate and a calculated end.
-  // For recurring, startDate from form is originalStartDate, endDate from form helps define first period length.
-  formStartDate: string; // Date string from form input for start
-  formEndDate: string; // Date string from form input for end (used to determine first period length for recurring)
+  formStartDate: string; 
+  formEndDate: string; 
 }
 
 
@@ -66,9 +59,9 @@ export type CategorizedTransaction = {
 };
 
 export type TaxDeductionInfo = {
-  transactionId: string; // Should match Transaction['id']
-  description: string; // Description of why it might be deductible
-  reason: string; // More detailed reason or rule
+  transactionId: string; 
+  description: string; 
+  reason: string; 
 };
 
 export type UnusualSpendingInfo = {
@@ -84,4 +77,5 @@ export type AccountFormData = {
   type: Account['type'];
   lastFour?: string | null;
 };
+
 

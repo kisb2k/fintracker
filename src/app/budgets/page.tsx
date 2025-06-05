@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription }
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label"; // Changed from RHFFormLabel
+import { Label } from "@/components/ui/label"; 
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -61,7 +61,7 @@ const recurrenceFrequencies: BudgetRecurrenceFrequency[] = ['weekly', 'biweekly'
 
 const budgetCategoryLimitSchema = z.object({
   category: z.string().min(1, "Category name is required"),
-  limit: z.coerce.number().positive("Limit must be a positive number"),
+  amountLimit: z.coerce.number().positive("Limit must be a positive number"), // Renamed from limit
 });
 
 const budgetFormSchema = z.object({
@@ -100,7 +100,7 @@ const BudgetForm: React.FC<BudgetFormProps> = ({ onSubmitBudget, initialData, on
     resolver: zodResolver(budgetFormSchema),
     defaultValues: initialData ? {
       name: initialData.name,
-      categoriesAndLimits: initialData.categories.map(c => ({ category: c.category, limit: c.limit })),
+      categoriesAndLimits: initialData.categories.map(c => ({ category: c.category, amountLimit: c.amountLimit })), // Use amountLimit
       isRecurring: initialData.isRecurring || false,
       recurrenceFrequency: initialData.recurrenceFrequency || null,
       formStartDate: format(parseISO(initialData.originalStartDate || initialData.startDate), 'yyyy-MM-dd'),
@@ -124,7 +124,7 @@ const BudgetForm: React.FC<BudgetFormProps> = ({ onSubmitBudget, initialData, on
 
   const handleAddCategoryToBudget = () => {
     if (selectedCategoryForNewLimit && !fields.find(f => f.category === selectedCategoryForNewLimit)) {
-      append({ category: selectedCategoryForNewLimit, limit: 100 }); 
+      append({ category: selectedCategoryForNewLimit, amountLimit: 100 }); // Use amountLimit
       setSelectedCategoryForNewLimit(""); 
     }
   };
@@ -165,7 +165,7 @@ const BudgetForm: React.FC<BudgetFormProps> = ({ onSubmitBudget, initialData, on
               <span className="font-medium text-sm flex-1">{fieldItem.category}</span>
               <Controller
                 control={form.control}
-                name={`categoriesAndLimits.${index}.limit`}
+                name={`categoriesAndLimits.${index}.amountLimit`} // Use amountLimit
                 render={({ field }) => (
                   <Input
                     type="number"
@@ -197,9 +197,9 @@ const BudgetForm: React.FC<BudgetFormProps> = ({ onSubmitBudget, initialData, on
         </ScrollArea>
         {form.formState.errors.categoriesAndLimits && <p className="text-sm text-destructive">{form.formState.errors.categoriesAndLimits.message || form.formState.errors.categoriesAndLimits.root?.message}</p>}
          {form.formState.errors.categoriesAndLimits?.map((_, index) => 
-            form.formState.errors.categoriesAndLimits?.[index]?.limit && (
+            form.formState.errors.categoriesAndLimits?.[index]?.amountLimit && ( // Check amountLimit error
                 <p key={`limit-error-${index}`} className="text-sm text-destructive mt-1">
-                    Category "{form.getValues(`categoriesAndLimits.${index}.category`)}": {form.formState.errors.categoriesAndLimits?.[index]?.limit?.message}
+                    Category "{form.getValues(`categoriesAndLimits.${index}.category`)}": {form.formState.errors.categoriesAndLimits?.[index]?.amountLimit?.message}
                 </p>
             )
         )}
@@ -358,8 +358,8 @@ export default function BudgetsPage() {
     const periodEnd = endOfDay(parseISO(periodEndDateStr));
 
     budgetCategoriesWithLimits.forEach(catLimit => {
-      categorySpending[catLimit.category] = { spent: 0, limit: catLimit.limit };
-      overallLimit += catLimit.limit;
+      categorySpending[catLimit.category] = { spent: 0, limit: catLimit.amountLimit }; // Use amountLimit
+      overallLimit += catLimit.amountLimit; // Use amountLimit
     });
 
     transactions
@@ -852,5 +852,3 @@ export default function BudgetsPage() {
     </div>
   );
 }
-
-
