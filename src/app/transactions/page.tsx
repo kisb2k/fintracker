@@ -61,8 +61,8 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { format, parse, parseISO, isValid } from 'date-fns';
-import { categorizeTransaction } from '@/ai/flows/categorize-transaction.ts';
-import { identifyTaxDeductions } from '@/ai/flows/identify-tax-deductions.ts';
+import { categorizeTransaction } from '@/ai/flows/categorize-transaction';
+import { identifyTaxDeductions } from '@/ai/flows/identify-tax-deductions';
 import { mapCsvHeader, type MapCsvHeaderOutput } from '@/ai/flows/map-csv-header-flow';
 import { REQUIRED_TRANSACTION_FIELDS } from '@/lib/constants';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -382,7 +382,7 @@ const FileUploadDialog: React.FC<{
 
     setIsProcessing(true);
     const reader = new FileReader();
-    const fileName = file.name; // Capture file name
+    const fileName = file.name; 
 
     reader.onload = async (e) => {
       const csvText = e.target?.result as string;
@@ -427,7 +427,7 @@ const FileUploadDialog: React.FC<{
         }
         
         if (parsedTransactions.length > 0) {
-          const batchResult = await addTransactionsBatch(parsedTransactions, fileName); // Pass fileName here
+          const batchResult = await addTransactionsBatch(parsedTransactions, fileName); 
           toast({ title: "File Processed", description: `${batchResult.successCount} of ${parsedTransactions.length} transactions loaded.` });
           if (batchResult.errors.length > 0) {
             console.error("Errors during batch transaction add:", batchResult.errors);
@@ -482,6 +482,25 @@ const FileUploadDialog: React.FC<{
     if (columnIndexMap.Date === undefined || columnIndexMap.Amount === undefined || columnIndexMap.Description === undefined) {
         throw new Error("Essential fields (Date, Amount, Description) could not be mapped or found in the CSV header.");
     }
+    
+    // Helper functions for parsing CSV values
+    const getDateValue = (index?: number, allValues?: string[]): string | undefined => (index !== undefined && allValues) ? allValues[index] : undefined;
+    const getStringValue = (index?: number, allValues?: string[]): string => ((index !== undefined && allValues) ? allValues[index] : "") || "";
+    const getNumericValue = (index?: number, allValues?: string[]): number => {
+        if (index === undefined || !allValues || allValues[index] === undefined || allValues[index].trim() === "") {
+          return NaN;
+        }
+        let s = allValues[index].trim();
+        // Remove common currency symbols ($, €, £) and thousands separators (,)
+        s = s.replace(/[$,€£]/g, '').replace(/,/g, '');
+        // Handle numbers in parentheses like (100.00) as negative
+        if (s.startsWith('(') && s.endsWith(')')) {
+          s = '-' + s.substring(1, s.length - 1);
+        }
+        const num = parseFloat(s);
+        return isNaN(num) ? NaN : num;
+    };
+
 
     for (let i = 0; i < dataLines.length; i++) {
       const line = dataLines[i];
@@ -492,14 +511,10 @@ const FileUploadDialog: React.FC<{
         console.warn(`Skipping malformed row ${i + 1}: column count mismatch. Expected ${actualHeader.length}, got ${values.length}. Line: "${line}"`);
         continue;
       }
-
-      const getDateValue = (index?: number): string | undefined => index !== undefined ? values[index] : undefined;
-      const getStringValue = (index?: number): string => (index !== undefined ? values[index] : "") || "";
-      const getNumericValue = (index?: number): number => index !== undefined ? parseFloat(values[index]) : NaN;
       
       const accountNameCsvColumn = mapping['Account Name'];
       const accountNameIndex = accountNameCsvColumn ? actualHeader.indexOf(accountNameCsvColumn) : -1;
-      const accountName = accountNameIndex !== -1 ? getStringValue(accountNameIndex) : "Default Account";
+      const accountName = accountNameIndex !== -1 ? getStringValue(accountNameIndex, values) : "Default Account";
       
       let accountId = existingAccountMap.get(accountName.toLowerCase());
 
@@ -516,7 +531,7 @@ const FileUploadDialog: React.FC<{
           accountId = newAccountsMap.get(accountName.toLowerCase())!.id;
       }
       
-      const dateStr = getDateValue(columnIndexMap.Date);
+      const dateStr = getDateValue(columnIndexMap.Date, values);
       if (!dateStr) {
           console.warn(`Skipping row ${i + 1} due to missing date.`);
           continue;
@@ -531,7 +546,7 @@ const FileUploadDialog: React.FC<{
           continue;
       }
 
-      let rawCsvAmount = getNumericValue(columnIndexMap.Amount);
+      let rawCsvAmount = getNumericValue(columnIndexMap.Amount, values);
       if (isNaN(rawCsvAmount)) {
           console.warn(`Skipping row ${i+1} due to invalid or missing amount. Value: "${values[columnIndexMap.Amount!]}"`);
           continue;
@@ -546,16 +561,16 @@ const FileUploadDialog: React.FC<{
       
       const typeCsvColumn = mapping.Type;
       const typeIndex = typeCsvColumn ? actualHeader.indexOf(typeCsvColumn) : -1;
-      let category = getStringValue(columnIndexMap.Category) || "Uncategorized";
+      let category = getStringValue(columnIndexMap.Category, values) || "Uncategorized";
 
       if (typeIndex !== -1) {
-          const typeValue = getStringValue(typeIndex).toLowerCase();
+          const typeValue = getStringValue(typeIndex, values).toLowerCase();
       }
       
       transactions.push({
         accountId: accountId!,
         date: parsedDate.toISOString(),
-        description: getStringValue(columnIndexMap.Description) || "N/A",
+        description: getStringValue(columnIndexMap.Description, values) || "N/A",
         amount: finalAmount,
         category: category,
         status: 'posted',
@@ -801,8 +816,8 @@ export default function TransactionsPage() {
     setTransactionToDeleteId(null); 
   };
   
-  const handleBulkDelete = async () => {
-     if (selectedTransactionIds.length === 0) {
+ const handleBulkDelete = async () => {
+    if (selectedTransactionIds.length === 0) {
       toast({
         title: "No Transactions Selected",
         description: "Please select transactions to delete.",
@@ -949,7 +964,7 @@ export default function TransactionsPage() {
         );
       },
     },
-  ], [accounts, rowSelection]); // Added rowSelection as a dependency for columns memoization
+  ], [accounts, rowSelection, toast, fetchData]); 
 
 
   if (isLoading) {
@@ -1061,3 +1076,6 @@ export default function TransactionsPage() {
     </div>
   );
 }
+
+
+      
