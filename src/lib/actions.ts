@@ -1,9 +1,11 @@
 
 'use server';
 
-import type { Account, Transaction, AccountFormData } from '@/lib/types';
+import type { Account, Transaction, AccountFormData, Budget, BudgetCategoryLimit, BudgetUpsertData } from '@/lib/types';
 import { getDb } from '@/lib/db';
 import crypto from 'crypto';
+import { formatISO, parseISO, endOfMonth, endOfWeek, endOfQuarter, endOfYear, addWeeks, addMonths, addYears, startOfDay } from 'date-fns';
+
 
 // --- Account Actions ---
 
@@ -22,7 +24,6 @@ export async function addAccount(accountData: AccountFormData): Promise<{ accoun
   const db = await getDb();
   const id = crypto.randomUUID();
   try {
-    // Check if an account with the same name already exists
     const existingAccountWithName = await db.get<Account>('SELECT id FROM accounts WHERE LOWER(name) = LOWER(?)', accountData.name);
     if (existingAccountWithName) {
         return { account: null, error: `An account with the name "${accountData.name}" already exists.` };
@@ -33,7 +34,7 @@ export async function addAccount(accountData: AccountFormData): Promise<{ accoun
       id,
       accountData.name,
       accountData.bankName,
-      0, // Initial balance is 0
+      0, 
       accountData.type,
       accountData.lastFour || null
     );
@@ -41,13 +42,7 @@ export async function addAccount(accountData: AccountFormData): Promise<{ accoun
     return { account: newAccount || null };
   } catch (error: any) {
     console.error('Failed to add account:', error);
-    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || error.message?.includes('UNIQUE constraint failed: accounts.id')) {
-        // This case should be rare with UUIDs but handle defensively
-        const existingAccount = await db.get<Account>('SELECT * FROM accounts WHERE id = ?', id);
-        return { account: existingAccount || null, error: `Account with ID ${id} already exists.` };
-    }
-    // Check for other unique constraints, e.g., if you add one for account name (already handled above but good for other potential unique fields)
-    if (error.message?.includes('UNIQUE constraint failed: accounts.name')) {
+    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.message?.includes('UNIQUE constraint failed: accounts.name')) {
          return { account: null, error: `An account with the name "${accountData.name}" already exists.` };
     }
     return { account: null, error: error.message || 'Failed to add account.' };
@@ -57,7 +52,6 @@ export async function addAccount(accountData: AccountFormData): Promise<{ accoun
 export async function updateAccountDetails(accountId: string, data: AccountFormData): Promise<{ success: boolean; error?: string; account?: Account | null }> {
   const db = await getDb();
   try {
-    // Check if an account with the new name already exists (if name is being changed and is not the current account's name)
     const currentAccount = await db.get<Account>('SELECT name FROM accounts WHERE id = ?', accountId);
     if (data.name !== currentAccount?.name) {
         const existingAccountWithName = await db.get<Account>('SELECT id FROM accounts WHERE LOWER(name) = LOWER(?) AND id != ?', data.name, accountId);
@@ -78,7 +72,7 @@ export async function updateAccountDetails(accountId: string, data: AccountFormD
     return { success: true, account: updatedAccount };
   } catch (error: any) {
     console.error(`Failed to update account ${accountId}:`, error);
-     if (error.message?.includes('UNIQUE constraint failed: accounts.name')) { // Should be caught by above check, but as fallback
+     if (error.message?.includes('UNIQUE constraint failed: accounts.name')) { 
          return { success: false, error: `An account with the name "${data.name}" already exists.` };
     }
     return { success: false, error: error.message || 'Failed to update account.' };
@@ -88,7 +82,6 @@ export async function updateAccountDetails(accountId: string, data: AccountFormD
 export async function deleteAccount(accountId: string): Promise<{ success: boolean; error?: string }> {
   const db = await getDb();
   try {
-    // Check if the account has any transactions
     const transactionCount = await db.get<{ count: number }>(
       'SELECT COUNT(*) as count FROM transactions WHERE accountId = ?',
       accountId
@@ -209,7 +202,7 @@ export async function addTransactionsBatch(
     console.error('Batch transaction insert failed, rolling back:', batchError);
     await db.exec('ROLLBACK');
     errors.push({ error: `Batch operation failed: ${(batchError as Error).message}` });
-    successCount = 0; // Reset success count on full batch failure
+    successCount = 0; 
   }
 
   for (const accountId of affectedAccountIds) {
@@ -276,14 +269,13 @@ export async function recalculateAllAccountBalances(): Promise<void> {
 export async function removeDuplicateTransactions(): Promise<{ success: boolean; duplicatesRemoved?: number; error?: string }> {
   const db = await getDb();
   try {
-    // Select IDs of transactions that are duplicates (keeping the one with MIN(id) for each group)
     const rowsToDelete = await db.all<{ id: string }>(`
       SELECT id
       FROM transactions
       WHERE id NOT IN (
           SELECT MIN(id)
           FROM transactions
-          GROUP BY accountId, date(date), amount, description
+          GROUP BY accountId, date(date), amount, description, sourceFileName -- Added sourceFileName to group
       );
     `);
 
@@ -296,10 +288,7 @@ export async function removeDuplicateTransactions(): Promise<{ success: boolean;
 
     const numRemoved = deleteResult.changes || 0;
     console.log(`Removed ${numRemoved} duplicate transactions.`);
-
-    // After removing duplicates, recalculate all account balances
     await recalculateAllAccountBalances();
-
     return { success: true, duplicatesRemoved: numRemoved };
 
   } catch (error: any) {
@@ -334,14 +323,12 @@ export async function deleteTransactionsBatch(transactionIds: string[]): Promise
   }
   const db = await getDb();
   try {
-    // Get distinct account IDs of transactions to be deleted *before* deleting them
     const placeholders = transactionIds.map(() => '?').join(',');
     const transactionsBeingDeleted = await db.all<{ accountId: string }>(`SELECT DISTINCT accountId FROM transactions WHERE id IN (${placeholders})`, ...transactionIds);
     const affectedAccountIds = new Set(transactionsBeingDeleted.map(t => t.accountId));
 
     const result = await db.run(`DELETE FROM transactions WHERE id IN (${placeholders})`, ...transactionIds);
 
-    // Recalculate balances for all accounts that were affected
     for (const accountId of affectedAccountIds) {
       await recalculateAndUpdateAccountBalance(accountId);
     }
@@ -360,7 +347,7 @@ export async function updateMultipleTransactionFields(
     date?: string;
     description?: string;
     amount?: number;
-    accountId?: string; // Added accountId for updating
+    accountId?: string; 
   }
 ): Promise<{ success: boolean; count?: number; error?: string }> {
   if (transactionIds.length === 0) {
@@ -383,7 +370,7 @@ export async function updateMultipleTransactionFields(
         console.warn(`Transaction with id ${id} not found for update.`);
         continue;
       }
-      allAffectedAccountIds.add(currentTransaction.accountId); // Add original account ID
+      allAffectedAccountIds.add(currentTransaction.accountId); 
 
       const setClauses: string[] = [];
       const params: (string | number | null)[] = [];
@@ -407,7 +394,7 @@ export async function updateMultipleTransactionFields(
       if (updates.accountId !== undefined) {
         setClauses.push('accountId = ?');
         params.push(updates.accountId);
-        allAffectedAccountIds.add(updates.accountId); // Add new account ID if changed
+        allAffectedAccountIds.add(updates.accountId); 
       }
 
       if (setClauses.length > 0) {
@@ -421,16 +408,249 @@ export async function updateMultipleTransactionFields(
     }
 
     await db.exec('COMMIT');
-
-    // Recalculate balances for all affected accounts (original and new)
     for (const accountId of allAffectedAccountIds) {
       await recalculateAndUpdateAccountBalance(accountId);
     }
-
     return { success: true, count: updatedCount };
   } catch (error: any) {
     await db.exec('ROLLBACK');
     console.error('Failed to bulk update transaction fields:', error);
     return { success: false, error: error.message || 'Unknown error occurred' };
+  }
+}
+
+
+// --- Budget Actions ---
+
+export async function addBudget(data: BudgetUpsertData): Promise<{ budget: Budget | null; error?: string }> {
+  const db = await getDb();
+  const budgetId = crypto.randomUUID();
+  
+  let formDefinedEndDateValue: string | null = null;
+  if (!data.isRecurring) {
+    formDefinedEndDateValue = formatISO(endOfDay(parseISO(data.formEndDate)));
+  }
+
+  try {
+    await db.exec('BEGIN TRANSACTION');
+    await db.run(
+      'INSERT INTO budgets (id, name, isRecurring, recurrenceFrequency, originalStartDate, formDefinedEndDate) VALUES (?, ?, ?, ?, ?, ?)',
+      budgetId,
+      data.name,
+      data.isRecurring,
+      data.isRecurring ? data.recurrenceFrequency : null,
+      data.isRecurring ? formatISO(startOfDay(parseISO(data.formStartDate))) : formatISO(startOfDay(parseISO(data.formStartDate))),
+      formDefinedEndDateValue
+    );
+
+    const stmt = await db.prepare(
+      'INSERT INTO budget_category_limits (id, budget_id, category_name, limit_amount) VALUES (?, ?, ?, ?)'
+    );
+    for (const catLimit of data.categoriesAndLimits) {
+      const catLimitId = crypto.randomUUID();
+      await stmt.run(catLimitId, budgetId, catLimit.category, catLimit.limit);
+    }
+    await stmt.finalize();
+    await db.exec('COMMIT');
+
+    return getBudgetById(budgetId); // Fetch the newly created budget with its details
+  } catch (error: any) {
+    await db.exec('ROLLBACK');
+    console.error('Failed to add budget:', error);
+    if (error.message?.includes('UNIQUE constraint failed: budgets.name')) {
+      return { budget: null, error: `A budget with the name "${data.name}" already exists.` };
+    }
+    return { budget: null, error: error.message || 'Failed to add budget.' };
+  }
+}
+
+export async function getBudgets(): Promise<Budget[]> {
+  const db = await getDb();
+  try {
+    const budgetRows = await db.all<any[]>(`
+      SELECT 
+        b.id, 
+        b.name, 
+        b.isRecurring, 
+        b.recurrenceFrequency, 
+        b.originalStartDate,
+        b.formDefinedEndDate
+      FROM budgets b
+      ORDER BY b.name ASC
+    `);
+
+    const budgets: Budget[] = [];
+    for (const row of budgetRows) {
+      const categoryLimits = await db.all<BudgetCategoryLimit>(
+        'SELECT category_name as category, limit_amount as limit FROM budget_category_limits WHERE budget_id = ?',
+        row.id
+      );
+
+      // Determine startDate and endDate for the Budget type (which represents the current/first period)
+      let displayStartDate: string;
+      let displayEndDate: string;
+      const originalStartDateParsed = parseISO(row.originalStartDate);
+
+      if (row.isRecurring) {
+        displayStartDate = row.originalStartDate; // This is the anchor for period generation
+        // End date of the first period for recurring budgets
+        switch (row.recurrenceFrequency) {
+            case 'weekly': displayEndDate = formatISO(endOfWeek(originalStartDateParsed, { weekStartsOn: 1 })); break;
+            case 'biweekly': displayEndDate = formatISO(endOfDay(addWeeks(originalStartDateParsed, 2))); break;
+            case 'monthly': displayEndDate = formatISO(endOfMonth(originalStartDateParsed)); break;
+            case 'quarterly': displayEndDate = formatISO(endOfQuarter(originalStartDateParsed)); break;
+            case 'annually': displayEndDate = formatISO(endOfYear(originalStartDateParsed)); break;
+            default: displayEndDate = formatISO(endOfMonth(originalStartDateParsed)); // Fallback
+        }
+      } else {
+        displayStartDate = row.originalStartDate;
+        displayEndDate = row.formDefinedEndDate; // Use the stored end date for non-recurring
+      }
+      
+      budgets.push({
+        id: row.id,
+        name: row.name,
+        categories: categoryLimits,
+        isRecurring: !!row.isRecurring,
+        recurrenceFrequency: row.recurrenceFrequency,
+        originalStartDate: row.originalStartDate, // This is the series start or non-recurring start
+        startDate: displayStartDate, // For display/initial period
+        endDate: displayEndDate,     // For display/initial period
+      });
+    }
+    return budgets;
+  } catch (error) {
+    console.error('Failed to fetch budgets:', error);
+    return [];
+  }
+}
+
+export async function getBudgetById(budgetId: string): Promise<{ budget: Budget | null; error?: string }> {
+  const db = await getDb();
+  try {
+    const row = await db.get<any>(`
+      SELECT 
+        b.id, 
+        b.name, 
+        b.isRecurring, 
+        b.recurrenceFrequency, 
+        b.originalStartDate,
+        b.formDefinedEndDate
+      FROM budgets b 
+      WHERE b.id = ?
+    `, budgetId);
+
+    if (!row) {
+      return { budget: null, error: 'Budget not found.' };
+    }
+
+    const categoryLimits = await db.all<BudgetCategoryLimit>(
+      'SELECT category_name as category, limit_amount as limit FROM budget_category_limits WHERE budget_id = ?',
+      row.id
+    );
+    
+    let displayStartDate: string;
+    let displayEndDate: string;
+    const originalStartDateParsed = parseISO(row.originalStartDate);
+
+    if (row.isRecurring) {
+        displayStartDate = row.originalStartDate;
+        switch (row.recurrenceFrequency) {
+            case 'weekly': displayEndDate = formatISO(endOfWeek(originalStartDateParsed, { weekStartsOn: 1 })); break;
+            case 'biweekly': displayEndDate = formatISO(endOfDay(addWeeks(originalStartDateParsed, 2))); break;
+            case 'monthly': displayEndDate = formatISO(endOfMonth(originalStartDateParsed)); break;
+            case 'quarterly': displayEndDate = formatISO(endOfQuarter(originalStartDateParsed)); break;
+            case 'annually': displayEndDate = formatISO(endOfYear(originalStartDateParsed)); break;
+            default: displayEndDate = formatISO(endOfMonth(originalStartDateParsed));
+        }
+    } else {
+        displayStartDate = row.originalStartDate;
+        displayEndDate = row.formDefinedEndDate;
+    }
+
+    const budget: Budget = {
+      id: row.id,
+      name: row.name,
+      categories: categoryLimits,
+      isRecurring: !!row.isRecurring,
+      recurrenceFrequency: row.recurrenceFrequency,
+      originalStartDate: row.originalStartDate,
+      startDate: displayStartDate,
+      endDate: displayEndDate,
+    };
+    return { budget };
+  } catch (error: any) {
+    console.error(`Failed to fetch budget ${budgetId}:`, error);
+    return { budget: null, error: error.message || 'Failed to fetch budget.' };
+  }
+}
+
+export async function updateBudget(id: string, data: BudgetUpsertData): Promise<{ budget: Budget | null; error?: string }> {
+  const db = await getDb();
+  let formDefinedEndDateValue: string | null = null;
+  if (!data.isRecurring) {
+    formDefinedEndDateValue = formatISO(endOfDay(parseISO(data.formEndDate)));
+  }
+
+  try {
+    await db.exec('BEGIN TRANSACTION');
+
+    // Check for name uniqueness if name is changing
+    const currentBudget = await db.get('SELECT name FROM budgets WHERE id = ?', id);
+    if (data.name !== currentBudget?.name) {
+        const existingBudget = await db.get('SELECT id FROM budgets WHERE name = ? AND id != ?', data.name, id);
+        if (existingBudget) {
+            await db.exec('ROLLBACK');
+            return { budget: null, error: `A budget with the name "${data.name}" already exists.` };
+        }
+    }
+    
+    await db.run(
+      'UPDATE budgets SET name = ?, isRecurring = ?, recurrenceFrequency = ?, originalStartDate = ?, formDefinedEndDate = ? WHERE id = ?',
+      data.name,
+      data.isRecurring,
+      data.isRecurring ? data.recurrenceFrequency : null,
+      data.isRecurring ? formatISO(startOfDay(parseISO(data.formStartDate))) : formatISO(startOfDay(parseISO(data.formStartDate))),
+      formDefinedEndDateValue,
+      id
+    );
+
+    // Clear existing category limits for this budget
+    await db.run('DELETE FROM budget_category_limits WHERE budget_id = ?', id);
+
+    // Add new category limits
+    const stmt = await db.prepare(
+      'INSERT INTO budget_category_limits (id, budget_id, category_name, limit_amount) VALUES (?, ?, ?, ?)'
+    );
+    for (const catLimit of data.categoriesAndLimits) {
+      const catLimitId = crypto.randomUUID();
+      await stmt.run(catLimitId, id, catLimit.category, catLimit.limit);
+    }
+    await stmt.finalize();
+    await db.exec('COMMIT');
+
+    return getBudgetById(id);
+  } catch (error: any) {
+    await db.exec('ROLLBACK');
+    console.error(`Failed to update budget ${id}:`, error);
+     if (error.message?.includes('UNIQUE constraint failed: budgets.name')) {
+      return { budget: null, error: `A budget with the name "${data.name}" already exists.` };
+    }
+    return { budget: null, error: error.message || 'Failed to update budget.' };
+  }
+}
+
+export async function deleteBudget(id: string): Promise<{ success: boolean; error?: string }> {
+  const db = await getDb();
+  try {
+    // Cascading delete will handle budget_category_limits
+    const result = await db.run('DELETE FROM budgets WHERE id = ?', id);
+    if (result.changes && result.changes > 0) {
+      return { success: true };
+    }
+    return { success: false, error: 'Budget not found or no changes made.' };
+  } catch (error: any) {
+    console.error(`Failed to delete budget ${id}:`, error);
+    return { success: false, error: error.message || 'Failed to delete budget.' };
   }
 }

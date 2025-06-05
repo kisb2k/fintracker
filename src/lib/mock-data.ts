@@ -1,6 +1,6 @@
 
-import type { Account, Transaction, Budget } from './types';
-import { formatISO, startOfMonth, endOfMonth, addMonths, subMonths, startOfWeek, endOfWeek, addDays } from 'date-fns';
+import type { Account, Transaction, Budget, BudgetCategoryLimit } from './types';
+import { formatISO, startOfMonth, endOfMonth, addMonths, subMonths, startOfWeek, endOfWeek, addDays, endOfDay } from 'date-fns';
 
 export const mockAccounts: Account[] = [
   {
@@ -159,53 +159,55 @@ const prevMonthStart = startOfMonth(subMonths(today,1));
 const prevMonthEnd = endOfMonth(subMonths(today,1));
 
 
+// mockBudgets are now effectively replaced by database storage.
+// This array can be kept for reference or removed if no longer needed for testing initial state.
 export const mockBudgets: Budget[] = [
-  {
-    id: 'bud_1',
-    name: 'Monthly Household Expenses',
-    categories: ['Groceries', 'Utilities'], // Multiple categories
-    limit: 600, // Overall limit for Groceries + Utilities
-    spent: 0, 
-    startDate: formatISO(currentMonthStart),
-    endDate: formatISO(currentMonthEnd),
-    isRecurring: true,
-    recurrenceFrequency: 'monthly',
-    originalStartDate: formatISO(startOfMonth(new Date(2024,0,1))), 
-  },
-  {
-    id: 'bud_2',
-    name: 'Discretionary Spending',
-    categories: ['Food & Drink', 'Entertainment', 'Shopping'], // Multiple categories
-    limit: 400,
-    spent: 0,
-    startDate: formatISO(currentMonthStart),
-    endDate: formatISO(currentMonthEnd),
-    isRecurring: true,
-    recurrenceFrequency: 'monthly',
-    originalStartDate: formatISO(startOfMonth(new Date(2024,0,1))),
-  },
-  {
-    id: 'bud_3',
-    name: 'One-time Tech Purchase',
-    categories: ['Shopping'], // Can still be a single category
-    limit: 300,
-    spent: 0,
-    startDate: formatISO(prevMonthStart), 
-    endDate: formatISO(prevMonthEnd),
-    isRecurring: false,
-  },
-  {
-    id: 'bud_4',
-    name: 'Weekly Transport',
-    categories: ['Transportation'],
-    limit: 75,
-    spent: 0,
-    startDate: formatISO(startOfWeek(today, { weekStartsOn: 1 })), // Example for current week
-    endDate: formatISO(endOfWeek(today, { weekStartsOn: 1 })),   
-    isRecurring: true,
-    recurrenceFrequency: 'weekly',
-    originalStartDate: formatISO(new Date('2024-01-01T00:00:00.000Z')),
-  }
+  // {
+  //   id: 'bud_1',
+  //   name: 'Monthly Household Expenses (Mock)',
+  //   categories: [
+  //       { category: 'Groceries', limit: 350 },
+  //       { category: 'Utilities', limit: 250 }
+  //   ],
+  //   startDate: formatISO(currentMonthStart), // Represents first/current period start
+  //   endDate: formatISO(currentMonthEnd),     // Represents first/current period end
+  //   isRecurring: true,
+  //   recurrenceFrequency: 'monthly',
+  //   originalStartDate: formatISO(startOfMonth(new Date(2024,0,1))), 
+  // },
+  // {
+  //   id: 'bud_2',
+  //   name: 'Discretionary Spending (Mock)',
+  //   categories: [
+  //       { category: 'Food & Drink', limit: 200 },
+  //       { category: 'Entertainment', limit: 100 },
+  //       { category: 'Shopping', limit: 100 }
+  //   ],
+  //   startDate: formatISO(currentMonthStart),
+  //   endDate: formatISO(currentMonthEnd),
+  //   isRecurring: true,
+  //   recurrenceFrequency: 'monthly',
+  //   originalStartDate: formatISO(startOfMonth(new Date(2024,0,1))),
+  // },
+  // {
+  //   id: 'bud_3',
+  //   name: 'One-time Tech Purchase (Mock)',
+  //   categories: [{ category: 'Shopping', limit: 300 }],
+  //   startDate: formatISO(prevMonthStart), 
+  //   endDate: formatISO(prevMonthEnd),
+  //   isRecurring: false,
+  //   originalStartDate: formatISO(prevMonthStart), // For non-recurring, originalStartDate is the startDate
+  // },
+  // {
+  //   id: 'bud_4',
+  //   name: 'Weekly Transport (Mock)',
+  //   categories: [{ category: 'Transportation', limit: 75 }],
+  //   startDate: formatISO(startOfWeek(today, { weekStartsOn: 1 })),
+  //   endDate: formatISO(endOfWeek(today, { weekStartsOn: 1 })),   
+  //   isRecurring: true,
+  //   recurrenceFrequency: 'weekly',
+  //   originalStartDate: formatISO(new Date('2024-01-01T00:00:00.000Z')),
+  // }
 ];
 
 export const transactionCategories: string[] = [
@@ -224,6 +226,8 @@ export const transactionCategories: string[] = [
   "Income",
   "Investments",
   "Business Expense",
+  "Subscriptions",
   "Other",
   "Uncategorized" 
 ];
+
