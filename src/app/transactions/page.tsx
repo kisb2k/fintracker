@@ -40,16 +40,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-  FormDescription,
+  FormControl, // Keep for AddTransactionFormDialog
+  FormField, // Keep for AddTransactionFormDialog
+  FormItem, // Keep for AddTransactionFormDialog
+  FormLabel as RHFFormLabel, // Keep for AddTransactionFormDialog, aliased to avoid conflict
+  FormMessage, // Keep for AddTransactionFormDialog
+  FormDescription, // Keep for AddTransactionFormDialog
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Label } from "@/components/ui/label";
+import { Label } from "@/components/ui/label"; // Use basic Label for BulkCategoryUpdateDialog
 import {
   Select,
   SelectContent,
@@ -164,7 +164,7 @@ const AddTransactionFormDialog: React.FC<{
               name="description"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Description</FormLabel>
+                  <RHFFormLabel>Description</RHFFormLabel>
                   <FormControl><Input placeholder="e.g., Coffee with client" {...field} /></FormControl>
                   <FormMessage />
                 </FormItem>
@@ -176,7 +176,7 @@ const AddTransactionFormDialog: React.FC<{
                 name="amount"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Amount</FormLabel>
+                    <RHFFormLabel>Amount</RHFFormLabel>
                     <FormControl><Input type="number" step="0.01" placeholder="0.00" {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
@@ -187,7 +187,7 @@ const AddTransactionFormDialog: React.FC<{
                 name="type"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Type</FormLabel>
+                    <RHFFormLabel>Type</RHFFormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger></FormControl>
                       <SelectContent>
@@ -205,7 +205,7 @@ const AddTransactionFormDialog: React.FC<{
                 name="date"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Date</FormLabel>
+                    <RHFFormLabel>Date</RHFFormLabel>
                     <FormControl><Input type="date" {...field} /></FormControl>
                     <FormMessage />
                   </FormItem>
@@ -217,7 +217,7 @@ const AddTransactionFormDialog: React.FC<{
                 name="category"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Category</FormLabel>
+                    <RHFFormLabel>Category</RHFFormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger></FormControl>
                       <SelectContent>
@@ -233,7 +233,7 @@ const AddTransactionFormDialog: React.FC<{
                 name="accountId"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Account</FormLabel>
+                    <RHFFormLabel>Account</RHFFormLabel>
                     <Select onValueChange={field.onChange} value={field.value || ""} disabled={accounts.length === 0}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select account" /></SelectTrigger></FormControl>
                       <SelectContent>
@@ -711,6 +711,7 @@ const BulkCategoryUpdateDialog: React.FC<{
       toast({ title: "Bulk Update Successful", description: `${result.count} transactions updated to category: ${newCategory}.`});
       onUpdateComplete();
       onOpenChange(false);
+      setNewCategory(""); // Reset for next use
     } else {
       toast({ title: "Bulk Update Failed", description: result.error || "Could not update categories.", variant: "destructive"});
     }
@@ -718,7 +719,7 @@ const BulkCategoryUpdateDialog: React.FC<{
   };
   
   return (
-    <Dialog open={isOpen} onOpenChange={onOpenChange}>
+    <Dialog open={isOpen} onOpenChange={(open) => { onOpenChange(open); if (!open) setNewCategory("");}}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Bulk Update Category</DialogTitle>
@@ -726,16 +727,16 @@ const BulkCategoryUpdateDialog: React.FC<{
             Update the category for {selectedTransactionIds.length} selected transaction(s).
           </DialogDescription>
         </DialogHeader>
-        <div className="py-4 space-y-4">
-          <FormItem>
-            <FormLabel>New Category</FormLabel>
-            <Select onValueChange={setNewCategory} value={newCategory}>
-              <FormControl><SelectTrigger><SelectValue placeholder="Select new category" /></SelectTrigger></FormControl>
-              <SelectContent>
-                {allCategories.map(cat => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </FormItem>
+        <div className="py-4 space-y-2"> {/* Changed from space-y-4 to space-y-2 for tighter packing */}
+          <Label htmlFor="bulk-update-category-select">New Category</Label>
+          <Select onValueChange={setNewCategory} value={newCategory}>
+            <SelectTrigger id="bulk-update-category-select">
+              <SelectValue placeholder="Select new category" />
+            </SelectTrigger>
+            <SelectContent>
+              {allCategories.map(cat => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
+            </SelectContent>
+          </Select>
         </div>
         <DialogFooter>
           <DialogClose asChild><Button variant="outline" disabled={isUpdating}>Cancel</Button></DialogClose>
