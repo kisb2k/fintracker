@@ -3,12 +3,11 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { DollarSign, TrendingUp, TrendingDown, ListChecks, Info } from "lucide-react";
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { DollarSign, TrendingUp, TrendingDown, ListChecks, Info, PieChart as PieChartIcon, Eye } from "lucide-react";
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-// import { mockAccounts, mockTransactions, mockBudgets } from "@/lib/mock-data";
-import type { Transaction, Account } from "@/lib/types";
+import type { Transaction, Account, Budget, SpendingChartDataPoint, CategoryTransactionDetails } from "@/lib/types";
 import { format, parseISO, startOfMonth, endOfMonth, isWithinInterval } from 'date-fns';
 import { Button } from '@/components/ui/button';
 import {
@@ -19,43 +18,78 @@ import {
   DialogDescription,
   DialogFooter,
   DialogTrigger,
+  DialogClose,
 } from "@/components/ui/dialog";
 import { detectUnusualSpending } from '@/ai/flows/detect-unusual-spending';
 import type { DetectUnusualSpendingOutput } from '@/ai/flows/detect-unusual-spending';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { getAccounts, getTransactions } from '@/lib/actions';
+import { getAccounts, getTransactions, getBudgets } from '@/lib/actions';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
-const SpendingChart: React.FC<{ transactions: Transaction[] }> = ({ transactions }) => {
-  const [chartData, setChartData] = useState<any[]>([]);
+const CategoryDetailsDialog: React.FC<{
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+  details: CategoryTransactionDetails | null;
+}> = ({ isOpen, onOpenChange, details }) => {
+  if (!details) return null;
 
-  useEffect(() => {
-    if (!transactions) return;
-    const spendingByCategory = transactions
-      .filter(t => t.amount < 0)
-      .reduce((acc, transaction) => {
-        const category = transaction.category || 'Uncategorized';
-        acc[category] = (acc[category] || 0) + Math.abs(transaction.amount);
-        return acc;
-      }, {} as Record<string, number>);
+  return (
+    <Dialog open={isOpen} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Transactions for: {details.categoryName}</DialogTitle>
+          <DialogDescription>
+            Total Spent: ${details.totalSpent.toFixed(2)}
+            {details.limit !== undefined && ` / Limit: $${details.limit.toFixed(2)}`} (Current Month)
+          </DialogDescription>
+        </DialogHeader>
+        <ScrollArea className="max-h-[60vh] my-4">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Date</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {details.transactions.length > 0 ? details.transactions.map(t => (
+                <TableRow key={t.id}>
+                  <TableCell>{format(parseISO(t.date), 'MMM dd, yyyy')}</TableCell>
+                  <TableCell>{t.description}</TableCell>
+                  <TableCell className="text-right text-red-600">-${Math.abs(t.amount).toFixed(2)}</TableCell>
+                </TableRow>
+              )) : (
+                <TableRow><TableCell colSpan={3} className="text-center">No transactions for this category this month.</TableCell></TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </ScrollArea>
+        <DialogFooter>
+          <DialogClose asChild><Button variant="outline">Close</Button></DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
 
-    const formattedData = Object.entries(spendingByCategory).map(([name, value]) => ({
-      name,
-      Spending: parseFloat(value.toFixed(2)),
-    }));
-    setChartData(formattedData);
-  }, [transactions]);
+
+const SpendingChart: React.FC<{ 
+  data: SpendingChartDataPoint[];
+  onCategoryClick: (categoryName: string) => void;
+}> = ({ data, onCategoryClick }) => {
   
-  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82Ca9D'];
+  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82Ca9D', '#A4DE6C', '#D0ED57', '#FFC658'];
 
-  if (chartData.length === 0) {
-    return <p className="text-muted-foreground">No spending data available for chart.</p>;
+  if (data.length === 0) {
+    return <p className="text-muted-foreground text-center py-10">No spending data available for the default budget this month.</p>;
   }
 
   return (
     <ResponsiveContainer width="100%" height={300}>
       <PieChart>
         <Pie
-          data={chartData}
+          data={data}
           cx="50%"
           cy="50%"
           labelLine={false}
@@ -64,12 +98,24 @@ const SpendingChart: React.FC<{ transactions: Transaction[] }> = ({ transactions
           dataKey="Spending"
           nameKey="name"
           label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+          onClick={(payload) => {
+            if (payload && payload.name) {
+              onCategoryClick(payload.name as string);
+            }
+          }}
         >
-          {chartData.map((entry, index) => (
-            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+          {data.map((entry, index) => (
+            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} className="cursor-pointer focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2" />
           ))}
         </Pie>
-        <Tooltip formatter={(value: number) => `$${value.toFixed(2)}`} />
+        <Tooltip formatter={(value: number, name: string, entry: any) => {
+          const limit = entry.payload.limit;
+          let tooltipText = `$${value.toFixed(2)}`;
+          if (limit !== undefined) {
+            tooltipText += ` (Limit: $${limit.toFixed(2)})`;
+          }
+          return [tooltipText, name];
+        }} />
         <Legend />
       </PieChart>
     </ResponsiveContainer>
@@ -86,7 +132,7 @@ const RecentTransactions: React.FC<{ transactions: Transaction[] }> = ({ transac
   }, [transactions]);
 
   if(recentTransactions.length === 0) {
-    return <p className="text-muted-foreground">No recent transactions.</p>;
+    return <p className="text-muted-foreground text-center py-4">No recent transactions.</p>;
   }
 
   return (
@@ -130,10 +176,9 @@ const UnusualSpendingAlert: React.FC<{ transactions: Transaction[], accounts: Ac
     setError(null);
     setAiResult(null);
     try {
-      // Use the first account for simplicity in this example, or implement account selection
       const firstAccount = accounts[0];
       const result = await detectUnusualSpending({
-        transactionHistory: JSON.stringify(transactions),
+        transactionHistory: JSON.stringify(transactions.slice(0, 50)), // Limit history for performance
         accountId: firstAccount?.id || 'N/A',
         accountType: firstAccount?.type || 'N/A',
       });
@@ -176,7 +221,13 @@ const UnusualSpendingAlert: React.FC<{ transactions: Transaction[], accounts: Ac
 export default function DashboardPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [defaultBudget, setDefaultBudget] = useState<Budget | null>(null);
+  const [spendingChartData, setSpendingChartData] = useState<SpendingChartDataPoint[]>([]);
+  
+  const [isCategoryDetailsOpen, setIsCategoryDetailsOpen] = useState(false);
+  const [selectedCategoryDetails, setSelectedCategoryDetails] = useState<CategoryTransactionDetails | null>(null);
 
   const [totalBalance, setTotalBalance] = useState(0);
   const [monthlyIncome, setMonthlyIncome] = useState(0);
@@ -184,12 +235,18 @@ export default function DashboardPage() {
 
   const fetchData = useCallback(async () => {
     setIsLoading(true);
-    const [dbAccounts, dbTransactions] = await Promise.all([
+    const [dbAccounts, dbTransactions, dbBudgets] = await Promise.all([
       getAccounts(),
-      getTransactions()
+      getTransactions(),
+      getBudgets()
     ]);
     setAccounts(dbAccounts);
     setTransactions(dbTransactions);
+    setBudgets(dbBudgets);
+
+    const foundDefaultBudget = dbBudgets.find(b => b.isDefault) || (dbBudgets.length > 0 ? dbBudgets[0] : null);
+    setDefaultBudget(foundDefaultBudget);
+
     setIsLoading(false);
   }, []);
 
@@ -198,7 +255,7 @@ export default function DashboardPage() {
   }, [fetchData]);
 
   useEffect(() => {
-    if (isLoading) return;
+    if (isLoading || !transactions.length) return;
 
     const currentMonthStart = startOfMonth(new Date());
     const currentMonthEnd = endOfMonth(new Date());
@@ -221,7 +278,56 @@ export default function DashboardPage() {
       })
       .reduce((sum, t) => sum + Math.abs(t.amount), 0);
     setMonthlyExpenses(expenses);
-  }, [accounts, transactions, isLoading]);
+
+    // Prepare data for SpendingChart based on default budget
+    if (defaultBudget && defaultBudget.categories.length > 0) {
+      const currentMonthTransactions = transactions.filter(t => {
+        const tDate = parseISO(t.date);
+        return isWithinInterval(tDate, { start: currentMonthStart, end: currentMonthEnd });
+      });
+
+      const newChartData = defaultBudget.categories.map(catLimit => {
+        const spentInCat = currentMonthTransactions
+          .filter(t => t.category === catLimit.category && t.amount < 0)
+          .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+        return {
+          name: catLimit.category,
+          Spending: parseFloat(spentInCat.toFixed(2)),
+          limit: catLimit.amountLimit,
+        };
+      });
+      setSpendingChartData(newChartData);
+    } else {
+      setSpendingChartData([]); // Clear chart data if no default budget or no categories
+    }
+
+  }, [accounts, transactions, isLoading, defaultBudget]);
+
+  const handleCategoryChartClick = (categoryName: string) => {
+    if (!defaultBudget) return;
+
+    const currentMonthStart = startOfMonth(new Date());
+    const currentMonthEnd = endOfMonth(new Date());
+
+    const categoryLimitObj = defaultBudget.categories.find(c => c.category === categoryName);
+
+    const transactionsForCategory = transactions.filter(t => 
+      t.category === categoryName && 
+      t.amount < 0 && // Only expenses
+      isWithinInterval(parseISO(t.date), { start: currentMonthStart, end: currentMonthEnd })
+    ).sort((a,b) => parseISO(b.date).getTime() - parseISO(a.date).getTime());
+
+    const totalSpentForCategory = transactionsForCategory.reduce((sum, t) => sum + Math.abs(t.amount), 0);
+    
+    setSelectedCategoryDetails({
+      categoryName,
+      transactions: transactionsForCategory,
+      totalSpent: totalSpentForCategory,
+      limit: categoryLimitObj?.amountLimit
+    });
+    setIsCategoryDetailsOpen(true);
+  };
+
 
   if (isLoading) {
     return <div className="flex justify-center items-center h-64"><p>Loading dashboard data...</p></div>;
@@ -237,7 +343,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">${totalBalance.toFixed(2)}</div>
-            <p className="text-xs text-muted-foreground">Across all accounts from DB</p>
+            <p className="text-xs text-muted-foreground">Across all accounts</p>
           </CardContent>
         </Card>
         <Card>
@@ -247,7 +353,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-600">+${monthlyIncome.toFixed(2)}</div>
-            <p className="text-xs text-muted-foreground">This month (from DB)</p>
+            <p className="text-xs text-muted-foreground">This month</p>
           </CardContent>
         </Card>
         <Card>
@@ -257,7 +363,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-red-600">-${monthlyExpenses.toFixed(2)}</div>
-            <p className="text-xs text-muted-foreground">This month (from DB)</p>
+            <p className="text-xs text-muted-foreground">This month</p>
           </CardContent>
         </Card>
       </div>
@@ -265,10 +371,14 @@ export default function DashboardPage() {
       <div className="grid gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>Spending by Category</CardTitle>
+            <CardTitle className="flex items-center">
+              <PieChartIcon className="h-5 w-5 mr-2 text-primary"/>
+              Spending by Default Budget Category (Current Month)
+            </CardTitle>
+            {!defaultBudget && <CardDescription className="mt-1">No default budget set. Please set one on the Budgets page.</CardDescription>}
           </CardHeader>
           <CardContent>
-            <SpendingChart transactions={transactions} />
+            <SpendingChart data={spendingChartData} onCategoryClick={handleCategoryChartClick} />
           </CardContent>
         </Card>
         <UnusualSpendingAlert transactions={transactions} accounts={accounts} />
@@ -283,6 +393,12 @@ export default function DashboardPage() {
           <RecentTransactions transactions={transactions} />
         </CardContent>
       </Card>
+      <CategoryDetailsDialog 
+        isOpen={isCategoryDetailsOpen}
+        onOpenChange={setIsCategoryDetailsOpen}
+        details={selectedCategoryDetails}
+      />
     </div>
   );
 }
+

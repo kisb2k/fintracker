@@ -24,13 +24,13 @@ export type BudgetRecurrenceFrequency = 'weekly' | 'biweekly' | 'monthly' | 'qua
 
 export interface BudgetCategoryLimit {
   category: string;
-  amountLimit: number; // Renamed from limit
+  amountLimit: number;
 }
 
 export type Budget = {
   id: string;
   name: string;
-  categories: BudgetCategoryLimit[]; // Array of objects with category and its limit
+  categories: BudgetCategoryLimit[]; 
   
   startDate: string; 
   endDate: string;   
@@ -38,12 +38,13 @@ export type Budget = {
   isRecurring?: boolean;
   recurrenceFrequency?: BudgetRecurrenceFrequency | null;
   originalStartDate?: string | null; 
+  isDefault?: boolean; // New field for default budget
 };
 
 // Data structure for creating/updating budgets via forms/actions
 export interface BudgetUpsertData {
   name: string;
-  categoriesAndLimits: BudgetCategoryLimit[]; // Uses updated BudgetCategoryLimit
+  categoriesAndLimits: BudgetCategoryLimit[];
   isRecurring: boolean;
   recurrenceFrequency: BudgetRecurrenceFrequency | null;
   formStartDate: string; 
@@ -78,4 +79,18 @@ export type AccountFormData = {
   lastFour?: string | null;
 };
 
+// For Dashboard Spending Chart
+export type SpendingChartDataPoint = {
+  name: string; // Category name
+  Spending: number;
+  limit?: number; // Optional: for displaying limit in tooltip or for comparison
+};
+
+// For Dashboard Drilldown Dialog
+export interface CategoryTransactionDetails {
+  categoryName: string;
+  transactions: Transaction[];
+  totalSpent: number;
+  limit?: number;
+}
 

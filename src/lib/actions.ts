@@ -434,13 +434,14 @@ export async function addBudget(data: BudgetUpsertData): Promise<{ budget: Budge
   try {
     await db.exec('BEGIN TRANSACTION');
     await db.run(
-      'INSERT INTO budgets (id, name, isRecurring, recurrenceFrequency, originalStartDate, formDefinedEndDate) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO budgets (id, name, isRecurring, recurrenceFrequency, originalStartDate, formDefinedEndDate, isDefault) VALUES (?, ?, ?, ?, ?, ?, ?)',
       budgetId,
       data.name,
       data.isRecurring,
       data.isRecurring ? data.recurrenceFrequency : null,
       data.isRecurring ? formatISO(startOfDay(parseISO(data.formStartDate))) : formatISO(startOfDay(parseISO(data.formStartDate))),
-      formDefinedEndDateValue
+      formDefinedEndDateValue,
+      0 // Not default by default
     );
 
     const stmt = await db.prepare(
@@ -448,7 +449,7 @@ export async function addBudget(data: BudgetUpsertData): Promise<{ budget: Budge
     );
     for (const catLimit of data.categoriesAndLimits) {
       const catLimitId = crypto.randomUUID();
-      await stmt.run(catLimitId, budgetId, catLimit.category, catLimit.amountLimit); // Use amountLimit
+      await stmt.run(catLimitId, budgetId, catLimit.category, catLimit.amountLimit);
     }
     await stmt.finalize();
     await db.exec('COMMIT');
@@ -474,15 +475,16 @@ export async function getBudgets(): Promise<Budget[]> {
         b.isRecurring, 
         b.recurrenceFrequency, 
         b.originalStartDate,
-        b.formDefinedEndDate
+        b.formDefinedEndDate,
+        b.isDefault
       FROM budgets b
       ORDER BY b.name ASC
     `);
 
     const budgets: Budget[] = [];
     for (const row of budgetRows) {
-      const categoryLimitsRaw = await db.all<{ category: string; amountLimit: number }>( // Expect amountLimit
-        'SELECT category_name as category, limit_amount as amountLimit FROM budget_category_limits WHERE budget_id = ?', // Alias to amountLimit
+      const categoryLimitsRaw = await db.all<{ category: string; amountLimit: number }>(
+        'SELECT category_name as category, limit_amount as amountLimit FROM budget_category_limits WHERE budget_id = ?',
         row.id
       );
       
@@ -519,7 +521,8 @@ export async function getBudgets(): Promise<Budget[]> {
         recurrenceFrequency: row.recurrenceFrequency,
         originalStartDate: row.originalStartDate, 
         startDate: displayStartDate, 
-        endDate: displayEndDate,     
+        endDate: displayEndDate,
+        isDefault: !!row.isDefault,     
       });
     }
     return budgets;
@@ -539,7 +542,8 @@ export async function getBudgetById(budgetId: string): Promise<{ budget: Budget 
         b.isRecurring, 
         b.recurrenceFrequency, 
         b.originalStartDate,
-        b.formDefinedEndDate
+        b.formDefinedEndDate,
+        b.isDefault
       FROM budgets b 
       WHERE b.id = ?
     `, budgetId);
@@ -548,8 +552,8 @@ export async function getBudgetById(budgetId: string): Promise<{ budget: Budget 
       return { budget: null, error: 'Budget not found.' };
     }
 
-    const categoryLimitsRaw = await db.all<{ category: string; amountLimit: number }>( // Expect amountLimit
-      'SELECT category_name as category, limit_amount as amountLimit FROM budget_category_limits WHERE budget_id = ?', // Alias to amountLimit
+    const categoryLimitsRaw = await db.all<{ category: string; amountLimit: number }>(
+      'SELECT category_name as category, limit_amount as amountLimit FROM budget_category_limits WHERE budget_id = ?',
       row.id
     );
     const categoryLimits: BudgetCategoryLimit[] = categoryLimitsRaw.map(raw => ({
@@ -585,6 +589,7 @@ export async function getBudgetById(budgetId: string): Promise<{ budget: Budget 
       originalStartDate: row.originalStartDate,
       startDate: displayStartDate,
       endDate: displayEndDate,
+      isDefault: !!row.isDefault,
     };
     return { budget };
   } catch (error: any) {
@@ -629,7 +634,7 @@ export async function updateBudget(id: string, data: BudgetUpsertData): Promise<
     );
     for (const catLimit of data.categoriesAndLimits) {
       const catLimitId = crypto.randomUUID();
-      await stmt.run(catLimitId, id, catLimit.category, catLimit.amountLimit); // Use amountLimit
+      await stmt.run(catLimitId, id, catLimit.category, catLimit.amountLimit);
     }
     await stmt.finalize();
     await db.exec('COMMIT');
@@ -656,6 +661,27 @@ export async function deleteBudget(id: string): Promise<{ success: boolean; erro
   } catch (error: any) {
     console.error(`Failed to delete budget ${id}:`, error);
     return { success: false, error: error.message || 'Failed to delete budget.' };
+  }
+}
+
+export async function setAsDefaultBudget(budgetId: string): Promise<{ success: boolean; error?: string }> {
+  const db = await getDb();
+  try {
+    await db.exec('BEGIN TRANSACTION');
+    // Set all other budgets to not be default
+    await db.run('UPDATE budgets SET isDefault = 0 WHERE id != ?', budgetId);
+    // Set the specified budget as default
+    const result = await db.run('UPDATE budgets SET isDefault = 1 WHERE id = ?', budgetId);
+    await db.exec('COMMIT');
+
+    if (result.changes && result.changes > 0) {
+      return { success: true };
+    }
+    return { success: false, error: 'Budget not found or no change made.' };
+  } catch (error: any) {
+    await db.exec('ROLLBACK');
+    console.error(`Failed to set budget ${budgetId} as default:`, error);
+    return { success: false, error: error.message || 'Failed to set default budget.' };
   }
 }
 

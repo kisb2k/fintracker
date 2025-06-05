@@ -26,8 +26,6 @@ import {
   DialogTrigger,
   DialogClose
 } from "@/components/ui/dialog";
-// Default categories are no longer the primary source for budget form
-// import { transactionCategories as defaultCategories } from '@/lib/mock-data';
 import type { Budget, Transaction, BudgetRecurrenceFrequency, BudgetCategoryLimit, BudgetUpsertData } from '@/lib/types';
 import { 
   format, parseISO, isValid, formatISO,
@@ -39,12 +37,12 @@ import {
   startOfYear, endOfYear,
   isBefore, isAfter,
 } from 'date-fns';
-import { PlusCircle, Edit, Trash2, Target, ListFilter, CalendarDays, X } from 'lucide-react'; // GripVertical removed
+import { PlusCircle, Edit, Trash2, Target, ListFilter, CalendarDays, X, Star, CheckCircle } from 'lucide-react';
 import { useForm, Controller, useFieldArray } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useToast } from "@/hooks/use-toast";
-import { getTransactions, addBudget, getBudgets, updateBudget, deleteBudget as deleteBudgetAction } from '@/lib/actions';
+import { getTransactions, addBudget, getBudgets, updateBudget, deleteBudget as deleteBudgetAction, setAsDefaultBudget as setAsDefaultBudgetAction } from '@/lib/actions';
 import { Badge } from '@/components/ui/badge';
 import {
   AlertDialog,
@@ -93,7 +91,6 @@ interface BudgetFormProps {
   initialData?: Budget;
   onClose: () => void;
   availableCategories: string[];
-  // openAddCategoryDialog prop removed
 }
 
 const BudgetForm: React.FC<BudgetFormProps> = ({ onSubmitBudget, initialData, onClose, availableCategories }) => {
@@ -125,7 +122,7 @@ const BudgetForm: React.FC<BudgetFormProps> = ({ onSubmitBudget, initialData, on
 
   const handleAddCategoryToBudget = () => {
     if (selectedCategoryForNewLimit && !fields.find(f => f.category === selectedCategoryForNewLimit)) {
-      append({ category: selectedCategoryForNewLimit, amountLimit: 100 });
+      append({ category: selectedCategoryForNewLimit, amountLimit: 100 }); // Default limit to 100
       setSelectedCategoryForNewLimit("");
     }
   };
@@ -156,8 +153,7 @@ const BudgetForm: React.FC<BudgetFormProps> = ({ onSubmitBudget, initialData, on
                 {availableCategories.length === 0 && <SelectItem value="no-cats" disabled>No categories found in transactions</SelectItem>}
             </SelectContent>
           </Select>
-          <Button type="button" onClick={handleAddCategoryToBudget} variant="outline" size="sm" disabled={availableCategories.length === 0}>Add</Button>
-           {/* "New Category?" link removed */}
+          <Button type="button" onClick={handleAddCategoryToBudget} variant="outline" size="sm" disabled={!selectedCategoryForNewLimit || availableCategories.length === 0}>Add</Button>
         </div>
         <ScrollArea className="h-40 w-full rounded-md border p-2 space-y-2">
           {fields.map((fieldItem, index) => (
@@ -254,7 +250,6 @@ const BudgetForm: React.FC<BudgetFormProps> = ({ onSubmitBudget, initialData, on
   );
 };
 
-// AddCategoryDialog removed as it's no longer used.
 
 export default function BudgetsPage() {
   const [budgets, setBudgets] = useState<Budget[]>([]);
@@ -263,8 +258,6 @@ export default function BudgetsPage() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingBudget, setEditingBudget] = useState<Budget | undefined>(undefined);
   const { toast } = useToast();
-
-  // customCategories state and isAddCategoryDialogOpen state removed
   const [deletingBudgetId, setDeletingBudgetId] = useState<string | null>(null);
 
   const [selectedBudgetId, setSelectedBudgetId] = useState<string | null>(null);
@@ -281,7 +274,7 @@ export default function BudgetsPage() {
 
   const availableCategories = useMemo(() => {
     if (allTransactions.length === 0) return [];
-    const uniqueCategories = [...new Set(allTransactions.map(t => t.category).filter(Boolean))]; // Filter out undefined/null categories
+    const uniqueCategories = [...new Set(allTransactions.map(t => t.category).filter(Boolean))];
     return uniqueCategories.sort((a,b) => a.localeCompare(b));
   }, [allTransactions]);
 
@@ -294,8 +287,18 @@ export default function BudgetsPage() {
     ]);
     setBudgets(dbBudgets);
     setAllTransactions(dbTransactions);
+    
+    // If a budget was selected, try to keep it selected, otherwise select the default or first.
+    const currentSelected = dbBudgets.find(b => b.id === selectedBudgetId);
+    if (!currentSelected && dbBudgets.length > 0) {
+        const defaultBudget = dbBudgets.find(b => b.isDefault) || dbBudgets[0];
+        setSelectedBudgetId(defaultBudget.id);
+    } else if (dbBudgets.length === 0) {
+        setSelectedBudgetId(null);
+    }
+
     setIsLoading(false);
-  }, []);
+  }, [selectedBudgetId]); // Added selectedBudgetId to dependencies
 
   useEffect(() => {
     fetchBudgetData();
@@ -323,7 +326,7 @@ export default function BudgetsPage() {
     transactions
       .filter(t =>
         budgetCategoriesWithLimits.some(cl => cl.category === t.category) &&
-        t.amount < 0 &&
+        t.amount < 0 && // Only expenses count towards spending
         isValid(parseISO(t.date)) &&
         isWithinInterval(parseISO(t.date), { start: periodStart, end: periodEnd })
       )
@@ -343,12 +346,12 @@ export default function BudgetsPage() {
 
     switch (freq) {
         case 'weekly':
-            periodStart = startOfWeek(startDate, { weekStartsOn: 1 });
+            periodStart = startOfWeek(startDate, { weekStartsOn: 1 }); // Assuming week starts on Monday
             periodEnd = endOfWeek(startDate, { weekStartsOn: 1 });
             nameFmt = "'Week of' MMM dd, yyyy ('W'ww)";
             break;
-        case 'biweekly':
-            periodStart = startDate;
+        case 'biweekly': // Bi-weekly needs careful handling of start alignment
+            periodStart = startDate; // For simplicity, start from the given date
             periodEnd = endOfDay(addDays(addWeeks(startDate, 2), -1));
             nameFmt = "'Bi-Week' MMM dd, yyyy";
             break;
@@ -367,7 +370,7 @@ export default function BudgetsPage() {
             periodEnd = endOfYear(startDate);
             nameFmt = "yyyy";
             break;
-        default:
+        default: // Fallback, should not happen with typed frequency
             periodStart = startOfMonth(startDate);
             periodEnd = endOfMonth(startDate);
             nameFmt = "MMMM yyyy";
@@ -384,17 +387,21 @@ export default function BudgetsPage() {
     const today = new Date();
     
     if (!budget.isRecurring || !budget.originalStartDate) {
+        // For non-recurring budget or if originalStartDate is missing
         if (budget.originalStartDate && budget.endDate) {
-             const { periodName } = getPeriodBoundaries(parseISO(budget.originalStartDate), budget.recurrenceFrequency || 'monthly');
+             // Use a generic period name or derive from dates for non-recurring
+             const periodName = `Period: ${format(parseISO(budget.originalStartDate), 'MMM dd')} - ${format(parseISO(budget.endDate), 'MMM dd, yyyy')}`;
              return [{ name: periodName, startDate: budget.originalStartDate, endDate: budget.endDate }];
         }
-        return [];
+        return []; // No valid data to generate periods
     }
 
     const originalStartDateParsed = parseISO(budget.originalStartDate);
     if(!isValid(originalStartDateParsed) || !budget.recurrenceFrequency) return [];
 
+    // Find the current or closest future seed date for period generation
     let currentSeedDate = originalStartDateParsed;
+    // Iterate forward from originalStartDate until the period containing 'today' is found or passed
     while(isValid(currentSeedDate) && isBefore(getPeriodBoundaries(currentSeedDate, budget.recurrenceFrequency).periodEnd, today)) {
         switch (budget.recurrenceFrequency) {
             case 'weekly': currentSeedDate = addWeeks(currentSeedDate, 1); break;
@@ -403,20 +410,24 @@ export default function BudgetsPage() {
             case 'quarterly': currentSeedDate = addMonths(currentSeedDate, 3); break;
             case 'annually': currentSeedDate = addYears(currentSeedDate, 1); break;
         }
-        if (isAfter(currentSeedDate, addYears(today, 10))) break;
+        if (isAfter(currentSeedDate, addYears(today, 10))) break; // Safety break
     }
 
 
+    // Generate past periods
     let tempDateForPast = currentSeedDate;
     for (let i = 0; i < numPast; i++) {
         const { periodStart, periodEnd, periodName } = getPeriodBoundaries(tempDateForPast, budget.recurrenceFrequency);
+        // Ensure periods don't go before the budget's original start date
         if (isAfter(periodStart, originalStartDateParsed) || periodStart.getTime() === originalStartDateParsed.getTime()) {
              periods.unshift({ name: periodName, startDate: formatISO(periodStart), endDate: formatISO(periodEnd) });
         } else if (i === 0 && periodStart.getTime() < originalStartDateParsed.getTime() && periodEnd.getTime() >= originalStartDateParsed.getTime()) {
+            // Special case for the very first period if it partially overlaps originalStartDate
             periods.unshift({ name: periodName, startDate: formatISO(originalStartDateParsed), endDate: formatISO(periodEnd) });
         }
 
 
+        // Move to the previous period's seed date
         let prevTempDate: Date;
          switch (budget.recurrenceFrequency) {
             case 'weekly': prevTempDate = subWeeks(tempDateForPast, 1); break;
@@ -424,14 +435,16 @@ export default function BudgetsPage() {
             case 'monthly': prevTempDate = subMonths(tempDateForPast, 1); break;
             case 'quarterly': prevTempDate = subMonths(tempDateForPast, 3); break;
             case 'annually': prevTempDate = subYears(tempDateForPast, 1); break;
-            default: prevTempDate = tempDateForPast;
+            default: prevTempDate = tempDateForPast; // Should not happen
         }
+        // Stop if we go before the original start date for good
         if (isBefore(prevTempDate, originalStartDateParsed) && getPeriodBoundaries(prevTempDate, budget.recurrenceFrequency).periodEnd < originalStartDateParsed) break;
-        if (prevTempDate.getTime() === tempDateForPast.getTime() && tempDateForPast.getTime() !== originalStartDateParsed.getTime()) break;
+        if (prevTempDate.getTime() === tempDateForPast.getTime() && tempDateForPast.getTime() !== originalStartDateParsed.getTime()) break; // Safety break for no change
         tempDateForPast = prevTempDate;
-         if (isBefore(tempDateForPast, subYears(today, 10))) break;
+         if (isBefore(tempDateForPast, subYears(today, 10))) break; // Further safety break
     }
     
+    // Add current period if not already added (especially if numPast was 0)
     const currentSeedPeriodDetails = getPeriodBoundaries(currentSeedDate, budget.recurrenceFrequency);
     if (!periods.find(p => p.startDate === formatISO(currentSeedPeriodDetails.periodStart))) {
         const insertIndex = periods.findIndex(p => parseISO(p.startDate) > currentSeedPeriodDetails.periodStart);
@@ -440,7 +453,9 @@ export default function BudgetsPage() {
         else periods.splice(insertIndex, 0, periodToAdd);
     }
 
+    // Generate future periods
     let tempDateForFuture = currentSeedDate;
+    // If currentSeedDate's period is in the past, advance to the next period to start future generation
     if (isBefore(getPeriodBoundaries(tempDateForFuture, budget.recurrenceFrequency).periodEnd, today)) {
          switch (budget.recurrenceFrequency) {
             case 'weekly': tempDateForFuture = addWeeks(tempDateForFuture, 1); break;
@@ -453,9 +468,10 @@ export default function BudgetsPage() {
 
 
     for (let i = 0; i < numFuture; i++) {
+        // Ensure we don't re-add the current period if it was already the seed
         if (i > 0 || formatISO(getPeriodBoundaries(tempDateForFuture, budget.recurrenceFrequency).periodStart) !== currentSeedPeriodDetails.startDate) {
             const { periodStart, periodEnd, periodName } = getPeriodBoundaries(tempDateForFuture, budget.recurrenceFrequency);
-             if (!periods.find(p => p.startDate === formatISO(periodStart))) {
+             if (!periods.find(p => p.startDate === formatISO(periodStart))) { // Avoid duplicates
                 periods.push({ name: periodName, startDate: formatISO(periodStart), endDate: formatISO(periodEnd) });
             }
         }
@@ -467,13 +483,14 @@ export default function BudgetsPage() {
             case 'monthly': nextTempDate = addMonths(tempDateForFuture, 1); break;
             case 'quarterly': nextTempDate = addMonths(tempDateForFuture, 3); break;
             case 'annually': nextTempDate = addYears(tempDateForFuture, 1); break;
-            default: nextTempDate = tempDateForFuture;
+            default: nextTempDate = tempDateForFuture; // Should not happen
         }
-        if (nextTempDate.getTime() === tempDateForFuture.getTime()) break;
+        if (nextTempDate.getTime() === tempDateForFuture.getTime()) break; // Safety break
         tempDateForFuture = nextTempDate;
-         if (isAfter(tempDateForFuture, addYears(today, 10))) break;
+         if (isAfter(tempDateForFuture, addYears(today, 10))) break; // Further safety break
     }
     
+    // Deduplicate and sort periods (though generation logic should mostly handle this)
     const uniquePeriodsMap = new Map<string, { name: string; startDate: string; endDate: string }>();
     periods.forEach(p => { if(isValid(parseISO(p.startDate))) uniquePeriodsMap.set(p.startDate, p);});
     
@@ -489,15 +506,17 @@ export default function BudgetsPage() {
         const periods = generateBudgetPeriods(budget);
         setCurrentBudgetPeriods(periods);
         
+        // Attempt to select the current period by default, or the most recent past one.
         const todayInstance = new Date();
         let periodToView = periods.find(p => isValid(parseISO(p.startDate)) && isValid(parseISO(p.endDate)) && isWithinInterval(todayInstance, {start: parseISO(p.startDate), end: parseISO(p.endDate)}));
         
         if (!periodToView && periods.length > 0) {
+            // If no current period, find the most recent past period or the first future one
             const pastOrCurrentPeriods = periods.filter(p => isValid(parseISO(p.startDate)) && parseISO(p.startDate) <= todayInstance);
             if(pastOrCurrentPeriods.length > 0){
-                periodToView = pastOrCurrentPeriods[pastOrCurrentPeriods.length -1];
+                periodToView = pastOrCurrentPeriods[pastOrCurrentPeriods.length -1]; // Most recent past
             } else {
-                periodToView = periods[0];
+                periodToView = periods[0]; // First available period (likely future)
             }
         }
 
@@ -512,13 +531,15 @@ export default function BudgetsPage() {
             overallLimit
           });
         } else {
-          setViewedPeriodDetails(null);
+          setViewedPeriodDetails(null); // Reset if no valid period to view
         }
       } else {
+        // Selected budget ID is invalid or budget not found
         setCurrentBudgetPeriods([]);
         setViewedPeriodDetails(null);
       }
     } else {
+      // No budget selected
       setCurrentBudgetPeriods([]);
       setViewedPeriodDetails(null);
     }
@@ -530,7 +551,7 @@ export default function BudgetsPage() {
       const result = await updateBudget(id, data);
       if (result.budget) {
         toast({ title: "Budget Updated", description: `${result.budget.name} has been updated.`});
-        fetchBudgetData();
+        fetchBudgetData(); // Re-fetch to get updated list and details
       } else {
         toast({ title: "Error", description: result.error || "Failed to update budget.", variant: "destructive" });
       }
@@ -538,8 +559,8 @@ export default function BudgetsPage() {
       const result = await addBudget(data);
        if (result.budget) {
         toast({ title: "Budget Created", description: `${result.budget.name} has been created.`});
-        fetchBudgetData();
-        setSelectedBudgetId(result.budget.id);
+        fetchBudgetData(); // Re-fetch
+        setSelectedBudgetId(result.budget.id); // Auto-select the newly created budget
       } else {
         toast({ title: "Error", description: result.error || "Failed to create budget.", variant: "destructive" });
       }
@@ -558,9 +579,9 @@ export default function BudgetsPage() {
     const result = await deleteBudgetAction(deletingBudgetId);
     if (result.success) {
         toast({ title: "Budget Deleted", description: "The budget has been removed." });
-        fetchBudgetData();
+        fetchBudgetData(); // Re-fetch
         if (selectedBudgetId === deletingBudgetId) {
-            setSelectedBudgetId(null);
+            setSelectedBudgetId(null); // Clear selection if deleted budget was selected
         }
     } else {
         toast({ title: "Error Deleting Budget", description: result.error || "Could not delete the budget.", variant: "destructive" });
@@ -568,8 +589,15 @@ export default function BudgetsPage() {
     setDeletingBudgetId(null);
   };
 
-
-  // handleAddCategory function removed as categories are now transaction-driven
+  const handleSetAsDefault = async (budgetId: string) => {
+    const result = await setAsDefaultBudgetAction(budgetId);
+    if (result.success) {
+        toast({title: "Default Budget Set", description: "This budget is now your default for the dashboard."});
+        fetchBudgetData(); // Re-fetch to update the isDefault flag on budgets
+    } else {
+        toast({title: "Error", description: result.error || "Could not set budget as default.", variant: "destructive"});
+    }
+  };
 
   const handlePeriodSelect = (periodStartDate: string, periodEndDate: string) => {
     if (!selectedBudgetId) return;
@@ -620,24 +648,21 @@ export default function BudgetsPage() {
                   initialData={editingBudget}
                   onClose={() => { setIsFormOpen(false); setEditingBudget(undefined);}}
                   availableCategories={availableCategories}
-                  // openAddCategoryDialog prop removed
                 />
               </DialogContent>
             </Dialog>
-            {/* "Add New Category" button removed from top bar */}
         </div>
         <div className="min-w-[250px]">
             <Select onValueChange={setSelectedBudgetId} value={selectedBudgetId || ""}>
                 <SelectTrigger><SelectValue placeholder="Choose a budget to view..." /></SelectTrigger>
                 <SelectContent>
-                    {budgets.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
-                    {budgets.length === 0 && <SelectItem value="no-budgets" disabled>No budgets found in DB</SelectItem>}
+                    {budgets.map(b => <SelectItem key={b.id} value={b.id}>{b.name} {b.isDefault && "(Default)"}</SelectItem>)}
+                    {budgets.length === 0 && <SelectItem value="no-budgets" disabled>No budgets found</SelectItem>}
                 </SelectContent>
             </Select>
         </div>
       </div>
 
-      {/* AddCategoryDialog component usage removed */}
        <AlertDialog open={!!deletingBudgetId} onOpenChange={(open) => !open && setDeletingBudgetId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -686,12 +711,20 @@ export default function BudgetsPage() {
           <CardHeader>
             <div className="flex justify-between items-start">
                 <div>
-                    <CardTitle className="text-xl">{viewedPeriodDetails.budget.name} - Period Details</CardTitle>
+                    <CardTitle className="text-xl flex items-center">
+                        {viewedPeriodDetails.budget.name} - Period Details
+                        {viewedPeriodDetails.budget.isDefault && <Badge variant="secondary" className="ml-2"><CheckCircle className="h-4 w-4 mr-1 text-green-600"/> Default</Badge>}
+                    </CardTitle>
                      <div className="flex flex-wrap gap-1 mt-1">
-                        {viewedPeriodDetails.budget.categories.map(catItem => <Badge key={catItem.category} variant="secondary">{catItem.category}</Badge>)}
+                        {viewedPeriodDetails.budget.categories.map(catItem => <Badge key={catItem.category} variant="outline">{catItem.category}</Badge>)}
                     </div>
                 </div>
-                <div className="flex gap-1">
+                <div className="flex gap-1 items-center">
+                    {!viewedPeriodDetails.budget.isDefault && (
+                      <Button variant="outline" size="sm" onClick={() => handleSetAsDefault(viewedPeriodDetails.budget.id)}>
+                        <Star className="h-4 w-4 mr-1"/> Set as Default
+                      </Button>
+                    )}
                     <Button variant="ghost" size="icon" onClick={() => handleEditBudget(viewedPeriodDetails.budget)}>
                         <Edit className="h-4 w-4" /> <span className="sr-only">Edit Budget Definition</span>
                     </Button>
@@ -727,9 +760,9 @@ export default function BudgetsPage() {
                     {Object.entries(viewedPeriodDetails.categorySpending)
                       .sort(([catA], [catB]) => catA.localeCompare(catB))
                       .map(([category, data]) => {
-                        const progress = data.limit > 0 ? Math.min((data.spent / data.limit) * 100, 100) : 0;
+                        const progress = data.limit > 0 ? Math.min((data.spent / data.limit) * 100, 100) : (data.spent > 0 ? 100 : 0);
                         const remaining = data.limit - data.spent;
-                        const isOverBudget = data.spent > data.limit;
+                        const isOverBudget = data.spent > data.limit && data.limit > 0; // Only over budget if limit is positive
                         return (
                             <div key={category} className="p-3 border rounded-md bg-muted/20 hover:bg-muted/40 transition-colors">
                                 <div className="flex justify-between items-baseline mb-1">
@@ -744,7 +777,7 @@ export default function BudgetsPage() {
                                 <div className="flex justify-between items-baseline text-xs">
                                     <span className={`font-medium ${isOverBudget ? 'text-destructive': ''}`}>Spent: ${data.spent.toFixed(2)}</span>
                                     <span className={`${isOverBudget ? 'text-destructive' : 'text-muted-foreground'}`}>
-                                        {isOverBudget ? `$${Math.abs(remaining).toFixed(2)} Over` : `$${remaining.toFixed(2)} Left`}
+                                        {isOverBudget ? `$${Math.abs(remaining).toFixed(2)} Over` : (data.limit > 0 ? `$${remaining.toFixed(2)} Left` : 'No Limit Set')}
                                     </span>
                                 </div>
                             </div>
@@ -774,7 +807,7 @@ export default function BudgetsPage() {
           <CardContent className="flex flex-col items-center gap-4">
             <Target className="h-16 w-16 text-muted-foreground" />
             <p className="text-muted-foreground">No budget selected. Choose a budget from the dropdown or create a new one.</p>
-            {budgets.length === 0 && !isLoading && <p className="text-sm text-muted-foreground">No budgets found in the database. Create one to get started!</p>}
+            {budgets.length === 0 && !isLoading && <p className="text-sm text-muted-foreground">No budgets found. Create one to get started!</p>}
           </CardContent>
         </Card>
       )}

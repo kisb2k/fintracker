@@ -48,26 +48,10 @@ async function initializeDatabaseSchema(dbInstance: Database): Promise<void> {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
       isRecurring BOOLEAN DEFAULT FALSE,
-      recurrenceFrequency TEXT, -- e.g., 'weekly', 'monthly'
-      originalStartDate TEXT -- ISO string, used if recurring
-      -- startDate and endDate for the specific period are calculated dynamically or stored if non-recurring (original design)
-      -- For non-recurring, originalStartDate can be used as THE startDate, and an endDate can be stored or calculated.
-      -- For this implementation, originalStartDate will store the non-recurring start OR recurring series start.
-      -- An 'endDateForFirstPeriod' might be useful for recurring to define initial period length if not derivable from frequency alone.
-      -- Let's store an explicit 'endDate' for non-recurring, and for recurring, it's the end of the first period.
-      -- This simplifies the 'Budget' type for the DB, actual period instances are generated.
-      -- For non-recurring: originalStartDate = startDate, endDateForFirstPeriod = endDate
-      -- For recurring: originalStartDate = series start, endDateForFirstPeriod = end of the first cycle.
-      -- Decided: originalStartDate for start of series/non-recurring. Add explicit endDate field for non-recurring.
-      -- For recurring, the effective 'endDate' of a period is calculated.
-      -- Let's keep it simple: originalStartDate and recurrenceFrequency define recurring.
-      -- Non-recurring budgets will have isRecurring=false, and their "period" is defined by their originalStartDate and an implicit or calculated endDate.
-      -- For simplicity and flexibility, we might not store explicit start/end dates for budget definitions if they are recurring.
-      -- The Budget type in types.ts has startDate/endDate which are for the currently viewed instance.
-      -- DB table: originalStartDate. For non-recurring, it's THE start. For recurring, it's the anchor.
-      -- We need a way to know the span of a non-recurring budget if originalStartDate is its only date.
-      -- Let's add formDefinedEndDate to budgets table, NULL for recurring.
-      formDefinedEndDate TEXT -- ISO string, only for non-recurring budgets
+      recurrenceFrequency TEXT, 
+      originalStartDate TEXT,
+      formDefinedEndDate TEXT, -- ISO string, only for non-recurring budgets
+      isDefault BOOLEAN DEFAULT 0 -- New column for default budget
     );
 
     CREATE TABLE IF NOT EXISTS budget_category_limits (
@@ -83,6 +67,7 @@ async function initializeDatabaseSchema(dbInstance: Database): Promise<void> {
   await addColumnIfNotExists(dbInstance, 'transactions', 'loadTimestamp', 'TEXT');
   await addColumnIfNotExists(dbInstance, 'transactions', 'sourceFileName', 'TEXT');
   await addColumnIfNotExists(dbInstance, 'budgets', 'formDefinedEndDate', 'TEXT');
+  await addColumnIfNotExists(dbInstance, 'budgets', 'isDefault', 'BOOLEAN DEFAULT 0');
 
 
   // Ensure foreign key constraints are enabled
@@ -107,3 +92,4 @@ export async function getDb(): Promise<Database> {
   }
   return db;
 }
+
