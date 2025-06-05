@@ -109,7 +109,7 @@ const SpendingChart: React.FC<{
           dataKey="Spending"
           nameKey="name"
           label={({ name, percent, Spending }) => {
-            if (Spending === 0 && data.reduce((sum, entry) => sum + entry.Spending, 0) === 0) return name; // Show name if all spending is 0
+            if (Spending === 0 && data.reduce((sum, entry) => sum + entry.Spending, 0) === 0) return name; 
             return `${name} ${(percent * 100).toFixed(0)}%`;
           }}
           onClick={(payload) => {
@@ -199,7 +199,7 @@ const UnusualSpendingAlert: React.FC<{ transactionsInPeriod: Transaction[], acco
     try {
       const firstAccount = accounts[0];
       const result = await detectUnusualSpending({
-        transactionHistory: JSON.stringify(transactionsInPeriod.slice(0, 100)), // Limit history size for performance
+        transactionHistory: JSON.stringify(transactionsInPeriod.slice(0, 100)), 
         accountId: firstAccount?.id || 'N/A',
         accountType: firstAccount?.type || 'N/A',
       });
@@ -210,6 +210,13 @@ const UnusualSpendingAlert: React.FC<{ transactionsInPeriod: Transaction[], acco
     }
     setIsLoading(false);
   };
+  
+  useEffect(() => {
+    // Reset AI result and error when the period or transactions change
+    setAiResult(null);
+    setError(null);
+  }, [transactionsInPeriod, periodLabel]);
+
 
   return (
     <Card>
@@ -218,7 +225,7 @@ const UnusualSpendingAlert: React.FC<{ transactionsInPeriod: Transaction[], acco
         <Info className="h-4 w-4 text-muted-foreground" />
       </CardHeader>
       <CardContent>
-        <Button onClick={handleDetectUnusualSpending} disabled={isLoading || transactionsInPeriod.length === 0} className="mb-4">
+        <Button onClick={handleDetectUnusualSpending} disabled={isLoading || transactionsInPeriod.length === 0 || accounts.length === 0} className="mb-4">
           {isLoading ? "Analyzing..." : `Check for Unusual Spending in ${periodLabel}`}
         </Button>
         {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
@@ -233,7 +240,13 @@ const UnusualSpendingAlert: React.FC<{ transactionsInPeriod: Transaction[], acco
             </RHFDialogDescription>
           </Alert>
         )}
-         {!aiResult && !isLoading && !error && transactionsInPeriod.length > 0 && (
+         {!aiResult && !isLoading && !error && transactionsInPeriod.length === 0 && (
+            <p className="text-sm text-muted-foreground">Not enough transaction data for this period to analyze.</p>
+         )}
+         {!aiResult && !isLoading && !error && accounts.length === 0 && (
+            <p className="text-sm text-muted-foreground">No accounts found. Analysis requires at least one account.</p>
+         )}
+         {!aiResult && !isLoading && !error && transactionsInPeriod.length > 0 && accounts.length > 0 && (
           <p className="text-sm text-muted-foreground">Click the button above to analyze spending for this period.</p>
         )}
       </CardContent>
@@ -241,7 +254,7 @@ const UnusualSpendingAlert: React.FC<{ transactionsInPeriod: Transaction[], acco
   );
 };
 
-// Adapted from Budgets page
+
 const getPeriodBoundaries = (startDate: Date, freq: BudgetRecurrenceFrequency): { periodStart: Date; periodEnd: Date; periodName: string } => {
   let periodStart: Date, periodEnd: Date, periodName: string;
   let nameFmt: string;
@@ -253,7 +266,7 @@ const getPeriodBoundaries = (startDate: Date, freq: BudgetRecurrenceFrequency): 
           nameFmt = "'Week of' MMM dd, yyyy ('W'ww)";
           break;
       case 'biweekly':
-          periodStart = startDate; // For bi-weekly, the start date itself is the anchor of its period
+          periodStart = startDate; 
           periodEnd = endOfDay(addDays(addWeeks(startDate, 2),-1));
           nameFmt = "'Bi-Week' MMM dd, yyyy";
           break;
@@ -272,7 +285,7 @@ const getPeriodBoundaries = (startDate: Date, freq: BudgetRecurrenceFrequency): 
           periodEnd = endOfYear(startDate);
           nameFmt = "yyyy";
           break;
-      default: // Should not happen with typed frequency
+      default: 
           periodStart = startOfMonth(startDate);
           periodEnd = endOfMonth(startDate);
           nameFmt = "MMMM yyyy";
@@ -288,38 +301,38 @@ const generateBudgetPeriods = (budget: Budget | undefined | null, numPast = 6, n
   const today = new Date();
 
   if (!budget.isRecurring || !budget.originalStartDate) {
-      if (budget.originalStartDate && budget.endDate) { // Non-recurring budget
+      if (budget.originalStartDate && budget.endDate) { 
            const periodName = `Period: ${format(parseISO(budget.originalStartDate), 'MMM dd')} - ${format(parseISO(budget.endDate), 'MMM dd, yyyy')}`;
            return [{ name: periodName, startDate: budget.originalStartDate, endDate: budget.endDate }];
       }
-      return []; // Not enough info for non-recurring
+      return []; 
   }
 
   const originalStartDateParsed = parseISO(budget.originalStartDate);
   if(!isValid(originalStartDateParsed) || !budget.recurrenceFrequency) return [];
 
-  // Determine the "current" seed date for generating periods around today
+  
   let currentSeedDate = originalStartDateParsed;
   while(isValid(currentSeedDate) && isBefore(getPeriodBoundaries(currentSeedDate, budget.recurrenceFrequency).periodEnd, today)) {
       switch (budget.recurrenceFrequency) {
           case 'weekly': currentSeedDate = addWeeks(currentSeedDate, 1); break;
-          case 'biweekly': currentSeedDate = addWeeks(currentSeedDate, 2); break; // Bi-weekly advances by 2 weeks
+          case 'biweekly': currentSeedDate = addWeeks(currentSeedDate, 2); break;
           case 'monthly': currentSeedDate = addMonths(currentSeedDate, 1); break;
           case 'quarterly': currentSeedDate = addMonths(currentSeedDate, 3); break;
           case 'annually': currentSeedDate = addYears(currentSeedDate, 1); break;
       }
-      if (isAfter(currentSeedDate, addYears(today, 10))) break; // Safety break for far future
+      if (isAfter(currentSeedDate, addYears(today, 10))) break; 
   }
 
-  // Generate past periods
+  
   let tempDateForPast = currentSeedDate;
   for (let i = 0; i < numPast; i++) {
       const { periodStart, periodEnd, periodName } = getPeriodBoundaries(tempDateForPast, budget.recurrenceFrequency);
-       // Ensure periods don't go effectively before the budget's original start date
+      
       if (isAfter(periodStart, originalStartDateParsed) || periodStart.getTime() === originalStartDateParsed.getTime()) {
            periods.unshift({ name: periodName, startDate: formatISO(periodStart), endDate: formatISO(periodEnd) });
       } else if (periodStart.getTime() < originalStartDateParsed.getTime() && periodEnd.getTime() >= originalStartDateParsed.getTime()) {
-           // Special case for the very first period if it partially overlaps originalStartDate
+          
           periods.unshift({ name: periodName, startDate: formatISO(originalStartDateParsed), endDate: formatISO(periodEnd) });
       }
 
@@ -331,16 +344,16 @@ const generateBudgetPeriods = (budget: Budget | undefined | null, numPast = 6, n
           case 'monthly': prevTempDate = subMonths(tempDateForPast, 1); break;
           case 'quarterly': prevTempDate = subMonths(tempDateForPast, 3); break;
           case 'annually': prevTempDate = subYears(tempDateForPast, 1); break;
-          default: prevTempDate = tempDateForPast; // Should not happen
+          default: prevTempDate = tempDateForPast; 
       }
-       // Stop if we go before the original start date for good
+      
       if (isBefore(prevTempDate, originalStartDateParsed) && getPeriodBoundaries(prevTempDate, budget.recurrenceFrequency).periodEnd < originalStartDateParsed) break;
-      if (prevTempDate.getTime() === tempDateForPast.getTime() && tempDateForPast.getTime() !== originalStartDateParsed.getTime()) break; // Safety break for no change
+      if (prevTempDate.getTime() === tempDateForPast.getTime() && tempDateForPast.getTime() !== originalStartDateParsed.getTime()) break; 
       tempDateForPast = prevTempDate;
-       if (isBefore(tempDateForPast, subYears(today, 10))) break; // Further safety break
+       if (isBefore(tempDateForPast, subYears(today, 10))) break; 
   }
 
-  // Add current period (derived from currentSeedDate) if not already added
+  
   const currentSeedPeriodDetails = getPeriodBoundaries(currentSeedDate, budget.recurrenceFrequency);
   if (!periods.find(p => p.startDate === formatISO(currentSeedPeriodDetails.periodStart))) {
       const insertIndex = periods.findIndex(p => parseISO(p.startDate) > currentSeedPeriodDetails.periodStart);
@@ -349,9 +362,9 @@ const generateBudgetPeriods = (budget: Budget | undefined | null, numPast = 6, n
       else periods.splice(insertIndex, 0, periodToAdd);
   }
 
-  // Generate future periods
+  
   let tempDateForFuture = currentSeedDate;
-   // If currentSeedDate's period is in the past (relative to today), advance to the next period to start future generation
+  
   if (isBefore(getPeriodBoundaries(tempDateForFuture, budget.recurrenceFrequency).periodEnd, today)) {
        switch (budget.recurrenceFrequency) {
           case 'weekly': tempDateForFuture = addWeeks(tempDateForFuture, 1); break;
@@ -363,10 +376,10 @@ const generateBudgetPeriods = (budget: Budget | undefined | null, numPast = 6, n
   }
 
   for (let i = 0; i < numFuture; i++) {
-       // Ensure we don't re-add the "current" (seed) period if it was already handled
+      
       if (i > 0 || formatISO(getPeriodBoundaries(tempDateForFuture, budget.recurrenceFrequency).periodStart) !== currentSeedPeriodDetails.startDate) {
           const { periodStart, periodEnd, periodName } = getPeriodBoundaries(tempDateForFuture, budget.recurrenceFrequency);
-           if (!periods.find(p => p.startDate === formatISO(periodStart))) { // Avoid duplicates
+           if (!periods.find(p => p.startDate === formatISO(periodStart))) { 
               periods.push({ name: periodName, startDate: formatISO(periodStart), endDate: formatISO(periodEnd) });
           }
       }
@@ -378,14 +391,14 @@ const generateBudgetPeriods = (budget: Budget | undefined | null, numPast = 6, n
           case 'monthly': nextTempDate = addMonths(tempDateForFuture, 1); break;
           case 'quarterly': nextTempDate = addMonths(tempDateForFuture, 3); break;
           case 'annually': nextTempDate = addYears(tempDateForFuture, 1); break;
-          default: nextTempDate = tempDateForFuture; // Should not happen
+          default: nextTempDate = tempDateForFuture; 
       }
-      if (nextTempDate.getTime() === tempDateForFuture.getTime()) break; // Safety break
+      if (nextTempDate.getTime() === tempDateForFuture.getTime()) break; 
       tempDateForFuture = nextTempDate;
-       if (isAfter(tempDateForFuture, addYears(today, 10))) break; // Further safety break
+       if (isAfter(tempDateForFuture, addYears(today, 10))) break; 
   }
 
-  // Deduplicate and sort periods
+  
   const uniquePeriodsMap = new Map<string, { name: string; startDate: string; endDate: string }>();
   periods.forEach(p => { if(isValid(parseISO(p.startDate))) uniquePeriodsMap.set(p.startDate, p);});
 
@@ -397,7 +410,6 @@ const generateBudgetPeriods = (budget: Budget | undefined | null, numPast = 6, n
 export default function DashboardPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
-  // const [budgets, setBudgets] = useState<Budget[]>([]); // Not needed directly, defaultBudget is key
   const [isLoading, setIsLoading] = useState(true);
   const [defaultBudget, setDefaultBudget] = useState<Budget | null>(null);
   const [spendingChartData, setSpendingChartData] = useState<SpendingChartDataPoint[]>([]);
@@ -430,8 +442,7 @@ export default function DashboardPage() {
     ]);
     setAccounts(dbAccounts);
     setAllTransactions(dbTransactions);
-    // setBudgets(dbBudgets); // No longer need to store all budgets here
-
+    
     const foundDefaultBudget = dbBudgets.find(b => b.isDefault) || (dbBudgets.length > 0 ? dbBudgets[0] : null);
     setDefaultBudget(foundDefaultBudget);
 
@@ -448,8 +459,7 @@ export default function DashboardPage() {
       setDashboardBudgetPeriods(periods);
 
       if (periods.length > 0) {
-        // Only set/reset selectedDashboardPeriod if the defaultBudget itself has changed
-        // or if no period is currently selected for the active defaultBudget
+        
         if (initialPeriodSetForBudgetIdRef.current !== defaultBudget.id || !selectedDashboardPeriod) {
           const todayInstance = new Date();
           let periodToView = periods.find(p =>
@@ -458,29 +468,31 @@ export default function DashboardPage() {
             isWithinInterval(todayInstance, { start: parseISO(p.startDate), end: parseISO(p.endDate) })
           );
 
-          if (!periodToView) { // If no current period, find most recent past or first future
+          if (!periodToView) { 
             const pastOrCurrentPeriods = periods.filter(p =>
               isValid(parseISO(p.startDate)) && parseISO(p.startDate) <= todayInstance
             );
             if (pastOrCurrentPeriods.length > 0) {
-              periodToView = pastOrCurrentPeriods[pastOrCurrentPeriods.length - 1]; // Most recent past
+              periodToView = pastOrCurrentPeriods[pastOrCurrentPeriods.length - 1]; 
             } else {
-              periodToView = periods[0]; // First available (likely future)
+              periodToView = periods[0]; 
             }
           }
           setSelectedDashboardPeriod(periodToView || null);
           initialPeriodSetForBudgetIdRef.current = defaultBudget.id;
         }
-      } else { // No periods for this budget
+      } else { 
         setSelectedDashboardPeriod(null);
-        initialPeriodSetForBudgetIdRef.current = defaultBudget.id; // Mark as processed
+        setSpendingChartData([]); // Clear chart data if no periods
+        initialPeriodSetForBudgetIdRef.current = defaultBudget.id; 
       }
-    } else { // No default budget
+    } else { 
       setDashboardBudgetPeriods([]);
       setSelectedDashboardPeriod(null);
+      setSpendingChartData([]); // Clear chart data if no default budget
       initialPeriodSetForBudgetIdRef.current = null;
     }
-  }, [defaultBudget]); // Only depends on defaultBudget
+  }, [defaultBudget]); 
 
 
   const transactionsInSelectedPeriod = useMemo(() => {
@@ -494,12 +506,12 @@ export default function DashboardPage() {
 
 
   useEffect(() => {
-    // Guard for initial loading or if essential data isn't ready
+    
     if (isLoading || !selectedDashboardPeriod || !defaultBudget) {
-      setTotalBalance(accounts.reduce((sum, acc) => sum + acc.balance, 0)); // Recalc total balance even if other data is reset
+      setTotalBalance(accounts.reduce((sum, acc) => sum + acc.balance, 0)); 
       setPeriodIncome(0);
       setPeriodExpenses(0);
-      setSpendingChartData([]);
+      setSpendingChartData([]); 
       return;
     }
     
@@ -523,14 +535,14 @@ export default function DashboardPage() {
           .reduce((sum, t) => sum + Math.abs(t.amount), 0);
         return {
           name: catLimit.category,
-          Spending: spentInCat, // Use direct number
+          Spending: spentInCat,
           limit: catLimit.amountLimit,
         };
-      // Filter: show if spending OR if limit is defined and positive
+      
       }).filter(cd => cd.Spending > 0 || (typeof cd.limit === 'number' && cd.limit > 0));
       setSpendingChartData(newChartData);
     } else {
-      setSpendingChartData([]); // If no categories in default budget
+      setSpendingChartData([]); 
     }
 
   }, [accounts, transactionsInSelectedPeriod, isLoading, defaultBudget, selectedDashboardPeriod]);
@@ -623,7 +635,7 @@ export default function DashboardPage() {
               {selectedDashboardPeriod ? `+$${periodIncome.toFixed(2)}` : 'N/A'}
             </div>
             <p className="text-xs text-muted-foreground">
-              {selectedDashboardPeriod ? `For period: ${selectedDashboardPeriod.name}` : 'Select default budget & period'}
+              {selectedDashboardPeriod ? `For period: ${selectedDashboardPeriod.name}` : (defaultBudget ? 'Select a period' : 'Set default budget')}
             </p>
           </CardContent>
         </Card>
@@ -637,7 +649,7 @@ export default function DashboardPage() {
              {selectedDashboardPeriod ? `-$${periodExpenses.toFixed(2)}` : 'N/A'}
             </div>
             <p className="text-xs text-muted-foreground">
-              {selectedDashboardPeriod ? `For period: ${selectedDashboardPeriod.name}` : 'Select default budget & period'}
+             {selectedDashboardPeriod ? `For period: ${selectedDashboardPeriod.name}` : (defaultBudget ? 'Select a period' : 'Set default budget')}
             </p>
           </CardContent>
         </Card>
@@ -660,7 +672,7 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             {defaultBudget && selectedDashboardPeriod ? (
-              <SpendingChart data={spendingChartData} onCategoryClick={handleCategoryChartClick} />
+              <SpendingChart key={selectedPeriodLabel} data={spendingChartData} onCategoryClick={handleCategoryChartClick} />
             ) : (
               <p className="text-muted-foreground text-center py-10">
                 {defaultBudget ? "Select a period to view spending." : "Set a default budget and select a period to view spending chart."}
