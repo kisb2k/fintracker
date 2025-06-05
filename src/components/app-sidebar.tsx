@@ -1,7 +1,7 @@
 
 "use client";
 
-import React from 'react'; // Removed useState and useEffect
+import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
@@ -12,6 +12,7 @@ import {
   Landmark,
   Settings,
   PanelLeft,
+  PanelRight, // Added for expand button
 } from 'lucide-react';
 import {
   Sidebar,
@@ -24,6 +25,11 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"; // Added for tooltip
 import { cn } from '@/lib/utils';
 
 const navItems = [
@@ -38,12 +44,6 @@ export function AppSidebar() {
   const pathname = usePathname();
   const { state, toggleSidebar, isMobile } = useSidebar();
 
-  // Removed mounted state and useEffect
-
-  // The Sidebar component itself uses isMobile from context to switch between
-  // desktop (div) and mobile (Sheet) rendering.
-  // useIsMobile hook ensures isMobile is false on server and initial client render,
-  // then updates to true on mobile clients after hydration.
   return (
     <Sidebar 
       collapsible={isMobile ? "offcanvas" : "icon"} 
@@ -69,12 +69,11 @@ export function AppSidebar() {
                   tooltip={item.label}
                   className={cn(
                     "justify-start",
-                    state === 'collapsed' && !isMobile && 'justify-center' // Ensure justify-center only for collapsed desktop
+                    state === 'collapsed' && !isMobile && 'justify-center'
                   )}
                 >
                   <a>
                     <item.icon />
-                    {/* Show label if expanded, or if mobile (offcanvas typically shows labels) */}
                     {(state === 'expanded' || isMobile) && <span>{item.label}</span>}
                   </a>
                 </SidebarMenuButton>
@@ -83,12 +82,22 @@ export function AppSidebar() {
           ))}
         </SidebarMenu>
       </SidebarContent>
-      <SidebarFooter className="p-4">
-         {/* Show collapse button if expanded and not on mobile where it's handled by sheet overlay/trigger */}
-        {state === 'expanded' && !isMobile && (
+      <SidebarFooter className="p-4 border-t border-sidebar-border">
+        {!isMobile && state === 'expanded' && (
            <Button variant="ghost" className="w-full justify-start text-sidebar-foreground hover:bg-sidebar-accent" onClick={toggleSidebar}>
              <PanelLeft className="mr-2" /> Collapse
            </Button>
+        )}
+        {!isMobile && state === 'collapsed' && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button variant="ghost" className="w-full justify-center text-sidebar-foreground hover:bg-sidebar-accent" onClick={toggleSidebar}>
+                <PanelRight />
+                <span className="sr-only">Expand</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right" align="center">Expand</TooltipContent>
+          </Tooltip>
         )}
       </SidebarFooter>
     </Sidebar>
