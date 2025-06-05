@@ -36,7 +36,7 @@ import {
 import { Label } from "@/components/ui/label"
 
 
-interface DataTableProps<TData, TValue> {
+interface DataTableProps<TData extends { id: string }, TValue> { // Ensure TData has an id property
   columns: ColumnDef<TData, TValue>[]
   data: TData[]
   filterColumnId?: string
@@ -47,7 +47,7 @@ interface DataTableProps<TData, TValue> {
   onUpdateCategorySelected?: () => void;
 }
 
-export function DataTable<TData, TValue>({
+export function DataTable<TData extends { id: string }, TValue>({ // Ensure TData has an id property
   columns,
   data,
   filterColumnId,
@@ -68,6 +68,7 @@ export function DataTable<TData, TValue>({
     onColumnFiltersChange: setColumnFilters,
     getFilteredRowModel: getFilteredRowModel(),
     onRowSelectionChange: setRowSelection,
+    getRowId: (originalRow) => originalRow.id, // Use the 'id' field from the data for row identity
     state: {
       sorting,
       columnFilters,
