@@ -25,9 +25,9 @@ export type BudgetRecurrenceFrequency = 'weekly' | 'biweekly' | 'monthly' | 'qua
 export type Budget = {
   id: string;
   name: string;
-  category: string;
-  limit: number;
-  spent: number; // This will be 'spent' for the currently selected/viewed period
+  categories: string[]; // Changed from category: string to categories: string[]
+  limit: number; // This limit applies to the sum of spending across all categories in this budget
+  spent: number; // This will be 'spent' for the currently selected/viewed period (sum across categories)
   
   // For non-recurring, these define the single period
   // For recurring, these will be dynamically set for the selected period instance

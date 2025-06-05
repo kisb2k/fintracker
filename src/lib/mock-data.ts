@@ -1,6 +1,6 @@
 
 import type { Account, Transaction, Budget } from './types';
-import { formatISO, startOfMonth, endOfMonth, addMonths, subMonths } from 'date-fns';
+import { formatISO, startOfMonth, endOfMonth, addMonths, subMonths, startOfWeek, endOfWeek, addDays } from 'date-fns';
 
 export const mockAccounts: Account[] = [
   {
@@ -141,6 +141,15 @@ export const mockTransactions: Transaction[] = [
     amount: -1800.00,
     category: 'Housing',
     status: 'posted',
+  },
+  {
+    id: 'txn_11',
+    accountId: 'acc_1',
+    date: getDateString(4),
+    description: 'Utility Bill - Electricity',
+    amount: -75.00,
+    category: 'Utilities',
+    status: 'posted',
   }
 ];
 
@@ -153,21 +162,21 @@ const prevMonthEnd = endOfMonth(subMonths(today,1));
 export const mockBudgets: Budget[] = [
   {
     id: 'bud_1',
-    name: 'Monthly Groceries',
-    category: 'Groceries',
-    limit: 400,
-    spent: 0, // Will be calculated dynamically
+    name: 'Monthly Household Expenses',
+    categories: ['Groceries', 'Utilities'], // Multiple categories
+    limit: 600, // Overall limit for Groceries + Utilities
+    spent: 0, 
     startDate: formatISO(currentMonthStart),
     endDate: formatISO(currentMonthEnd),
     isRecurring: true,
     recurrenceFrequency: 'monthly',
-    originalStartDate: formatISO(startOfMonth(new Date(2024,0,1))), // January 1st, 2024
+    originalStartDate: formatISO(startOfMonth(new Date(2024,0,1))), 
   },
   {
     id: 'bud_2',
-    name: 'Eating Out',
-    category: 'Food & Drink',
-    limit: 250,
+    name: 'Discretionary Spending',
+    categories: ['Food & Drink', 'Entertainment', 'Shopping'], // Multiple categories
+    limit: 400,
     spent: 0,
     startDate: formatISO(currentMonthStart),
     endDate: formatISO(currentMonthEnd),
@@ -177,22 +186,22 @@ export const mockBudgets: Budget[] = [
   },
   {
     id: 'bud_3',
-    name: 'Shopping Spree (Non-recurring)',
-    category: 'Shopping',
+    name: 'One-time Tech Purchase',
+    categories: ['Shopping'], // Can still be a single category
     limit: 300,
     spent: 0,
-    startDate: formatISO(prevMonthStart), // Example non-recurring from last month
+    startDate: formatISO(prevMonthStart), 
     endDate: formatISO(prevMonthEnd),
     isRecurring: false,
   },
   {
     id: 'bud_4',
     name: 'Weekly Transport',
-    category: 'Transportation',
+    categories: ['Transportation'],
     limit: 75,
     spent: 0,
-    startDate: formatISO(today), // Placeholder, will be dynamic for periods
-    endDate: formatISO(today),   // Placeholder
+    startDate: formatISO(startOfWeek(today, { weekStartsOn: 1 })), // Example for current week
+    endDate: formatISO(endOfWeek(today, { weekStartsOn: 1 })),   
     isRecurring: true,
     recurrenceFrequency: 'weekly',
     originalStartDate: formatISO(new Date('2024-01-01T00:00:00.000Z')),
@@ -216,5 +225,5 @@ export const transactionCategories: string[] = [
   "Investments",
   "Business Expense",
   "Other",
-  "Uncategorized" // Added Uncategorized as a default
+  "Uncategorized" 
 ];
