@@ -10,6 +10,19 @@ let db: Database | null = null;
 const DB_FILE_PATH = path.join(process.cwd(), 'db', 'fintrack.db');
 const DB_DIR_PATH = path.join(process.cwd(), 'db');
 
+async function addColumnIfNotExists(dbInstance: Database, tableName: string, columnName: string, columnDefinition: string): Promise<void> {
+  const tableInfo = await dbInstance.all(`PRAGMA table_info(${tableName})`);
+  if (!tableInfo.some(col => col.name === columnName)) {
+    try {
+      await dbInstance.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
+      console.log(`Added column ${columnName} to ${tableName} table.`);
+    } catch (error) {
+      console.error(`Failed to add column ${columnName} to ${tableName}:`, error);
+      // Depending on strictness, you might want to re-throw or handle more gracefully
+    }
+  }
+}
+
 async function initializeDatabaseSchema(dbInstance: Database): Promise<void> {
   await dbInstance.exec(`
     CREATE TABLE IF NOT EXISTS accounts (
@@ -28,12 +41,16 @@ async function initializeDatabaseSchema(dbInstance: Database): Promise<void> {
       description TEXT NOT NULL,
       amount REAL NOT NULL, -- positive for income, negative for expense
       category TEXT,
-      status TEXT CHECK(status IN ('pending', 'posted')) DEFAULT 'posted',
-      loadTimestamp TEXT, -- ISO 8601 string for when the transaction was loaded
-      sourceFileName TEXT   -- Name of the file it came from, or 'Manual Entry'
+      status TEXT CHECK(status IN ('pending', 'posted')) DEFAULT 'posted'
+      -- loadTimestamp and sourceFileName will be added by addColumnIfNotExists if missing
     );
   `);
-  console.log('Database schema initialized or already exists.');
+
+  // Add columns that might be missing from an older schema
+  await addColumnIfNotExists(dbInstance, 'transactions', 'loadTimestamp', 'TEXT');
+  await addColumnIfNotExists(dbInstance, 'transactions', 'sourceFileName', 'TEXT');
+
+  console.log('Database schema initialized/updated.');
 }
 
 export async function getDb(): Promise<Database> {
@@ -49,7 +66,7 @@ export async function getDb(): Promise<Database> {
     });
     await initializeDatabaseSchema(newDbInstance);
     db = newDbInstance;
-    console.log('Database connection established and schema checked.');
+    console.log('Database connection established and schema checked/updated.');
   }
   return db;
 }
