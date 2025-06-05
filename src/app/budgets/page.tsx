@@ -1,12 +1,13 @@
 
 "use client";
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -22,26 +23,54 @@ import {
   DialogDescription,
   DialogFooter,
   DialogTrigger,
+  DialogClose
 } from "@/components/ui/dialog";
-import { mockBudgets, transactionCategories } from '@/lib/mock-data'; // mockTransactions removed
-import type { Budget, Transaction } from '@/lib/types';
-import { format, parseISO, isWithinInterval, startOfDay, endOfDay } from 'date-fns';
-import { PlusCircle, Edit, Trash2, Target } from 'lucide-react';
-import { useForm } from "react-hook-form";
+import { mockBudgets, transactionCategories as defaultCategories } from '@/lib/mock-data';
+import type { Budget, Transaction, BudgetRecurrenceFrequency } from '@/lib/types';
+import { 
+  format, parseISO, isValid,
+  startOfDay, endOfDay, isWithinInterval,
+  addWeeks, addMonths, addYears,
+  startOfWeek, endOfWeek,
+  startOfMonth, endOfMonth,
+  startOfQuarter, endOfQuarter,
+  startOfYear, endOfYear,
+  differenceInCalendarMonths,
+  differenceInCalendarWeeks,
+  differenceInCalendarYears,
+  differenceInCalendarQuarters,
+  isBefore, isAfter
+} from 'date-fns';
+import { PlusCircle, Edit, Trash2, Target, GripVertical, ListFilter, CalendarDays } from 'lucide-react';
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useToast } from "@/hooks/use-toast";
-import { getTransactions } from '@/lib/actions'; // Import getTransactions
+import { getTransactions } from '@/lib/actions';
+
+const recurrenceFrequencies: BudgetRecurrenceFrequency[] = ['weekly', 'biweekly', 'monthly', 'quarterly', 'annually'];
 
 const budgetFormSchema = z.object({
   name: z.string().min(1, "Budget name is required"),
   category: z.string().min(1, "Category is required"),
   limit: z.coerce.number().positive("Limit must be a positive number"),
-  startDate: z.string().refine((val) => isValid(parseISO(val)), { message: "Start date is required and must be valid"}),
-  endDate: z.string().refine((val) => isValid(parseISO(val)), { message: "End date is required and must be valid"}),
+  isRecurring: z.boolean().optional(),
+  recurrenceFrequency: z.string().optional().nullable(), // string to match SelectItem value
+  // For non-recurring, startDate and endDate define the single period.
+  // For recurring, startDate is originalStartDate, and endDate is the end of the *first* period.
+  startDate: z.string().refine((val) => isValid(parseISO(val)), { message: "Start date is required and must be valid" }),
+  endDate: z.string().refine((val) => isValid(parseISO(val)), { message: "End date is required and must be valid" }),
+}).refine(data => {
+  if (data.isRecurring && !data.recurrenceFrequency) {
+    return false; // recurrenceFrequency is required if isRecurring is true
+  }
+  return true;
+}, {
+  message: "Recurrence frequency is required for recurring budgets.",
+  path: ["recurrenceFrequency"],
 }).refine(data => parseISO(data.endDate) >= parseISO(data.startDate), {
-  message: "End date must be after or the same as start date",
-  path: ["endDate"], // path of error
+  message: "End date must be after or the same as start date for the initial period.",
+  path: ["endDate"],
 });
 
 type BudgetFormData = z.infer<typeof budgetFormSchema>;
@@ -50,23 +79,30 @@ const BudgetForm: React.FC<{
   onSubmitBudget: (data: BudgetFormData, id?: string) => void;
   initialData?: Budget;
   onClose: () => void;
-}> = ({ onSubmitBudget, initialData, onClose }) => {
+  availableCategories: string[];
+}> = ({ onSubmitBudget, initialData, onClose, availableCategories }) => {
   const form = useForm<BudgetFormData>({
     resolver: zodResolver(budgetFormSchema),
     defaultValues: initialData ? {
       name: initialData.name,
       category: initialData.category,
       limit: initialData.limit,
-      startDate: format(parseISO(initialData.startDate), 'yyyy-MM-dd'),
+      isRecurring: initialData.isRecurring || false,
+      recurrenceFrequency: initialData.recurrenceFrequency || null,
+      startDate: format(parseISO(initialData.originalStartDate || initialData.startDate), 'yyyy-MM-dd'),
       endDate: format(parseISO(initialData.endDate), 'yyyy-MM-dd'),
     } : {
       name: "",
       category: "",
       limit: 100,
-      startDate: format(new Date(new Date().getFullYear(), new Date().getMonth(), 1), 'yyyy-MM-dd'),
-      endDate: format(new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0), 'yyyy-MM-dd'),
+      isRecurring: false,
+      recurrenceFrequency: null,
+      startDate: format(startOfMonth(new Date()), 'yyyy-MM-dd'),
+      endDate: format(endOfMonth(new Date()), 'yyyy-MM-dd'),
     },
   });
+
+  const isRecurring = form.watch("isRecurring");
 
   const handleSubmit = (data: BudgetFormData) => {
     onSubmitBudget(data, initialData?.id);
@@ -74,37 +110,95 @@ const BudgetForm: React.FC<{
 
   return (
     <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-4">
-      <div>
-        <Label htmlFor="name">Budget Name</Label>
-        <Input id="name" {...form.register("name")} placeholder="e.g., Monthly Groceries" />
-        {form.formState.errors.name && <p className="text-sm text-destructive">{form.formState.errors.name.message}</p>}
-      </div>
-      <div>
-        <Label htmlFor="category">Category</Label>
-        <Select onValueChange={(value) => form.setValue("category", value)} defaultValue={form.getValues("category")}>
-          <SelectTrigger id="category"><SelectValue placeholder="Select category" /></SelectTrigger>
-          <SelectContent>
-            {transactionCategories.filter(c => c !== "Income").map(cat => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        {form.formState.errors.category && <p className="text-sm text-destructive">{form.formState.errors.category.message}</p>}
-      </div>
-      <div>
-        <Label htmlFor="limit">Limit ($)</Label>
-        <Input id="limit" type="number" step="0.01" {...form.register("limit")} placeholder="e.g., 400" />
-        {form.formState.errors.limit && <p className="text-sm text-destructive">{form.formState.errors.limit.message}</p>}
-      </div>
+      <FormField
+        control={form.control}
+        name="name"
+        render={({ field }) => (
+          <div className="space-y-1">
+            <Label htmlFor="name">Budget Name</Label>
+            <Input id="name" placeholder="e.g., Monthly Groceries" {...field} />
+            {form.formState.errors.name && <p className="text-sm text-destructive">{form.formState.errors.name.message}</p>}
+          </div>
+        )}
+      />
+      <FormField
+        control={form.control}
+        name="category"
+        render={({ field }) => (
+          <div className="space-y-1">
+            <Label htmlFor="category">Category</Label>
+            <Select onValueChange={field.onChange} defaultValue={field.value}>
+              <SelectTrigger id="category"><SelectValue placeholder="Select category" /></SelectTrigger>
+              <SelectContent>
+                {availableCategories.filter(c => c.toLowerCase() !== "income").map(cat => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {form.formState.errors.category && <p className="text-sm text-destructive">{form.formState.errors.category.message}</p>}
+          </div>
+        )}
+      />
+      <FormField
+        control={form.control}
+        name="limit"
+        render={({ field }) => (
+          <div className="space-y-1">
+            <Label htmlFor="limit">Limit ($)</Label>
+            <Input id="limit" type="number" step="0.01" placeholder="e.g., 400" {...field} />
+            {form.formState.errors.limit && <p className="text-sm text-destructive">{form.formState.errors.limit.message}</p>}
+          </div>
+        )}
+      />
+      <FormField
+        control={form.control}
+        name="isRecurring"
+        render={({ field }) => (
+          <div className="flex items-center space-x-2">
+            <Checkbox id="isRecurring" checked={field.value} onCheckedChange={field.onChange} />
+            <Label htmlFor="isRecurring">Is this a recurring budget?</Label>
+          </div>
+        )}
+      />
+      {isRecurring && (
+         <FormField
+          control={form.control}
+          name="recurrenceFrequency"
+          render={({ field }) => (
+            <div className="space-y-1">
+              <Label htmlFor="recurrenceFrequency">Recurrence Frequency</Label>
+              <Select onValueChange={field.onChange} defaultValue={field.value || undefined}>
+                <SelectTrigger id="recurrenceFrequency"><SelectValue placeholder="Select frequency" /></SelectTrigger>
+                <SelectContent>
+                  {recurrenceFrequencies.map(freq => <SelectItem key={freq} value={freq} className="capitalize">{freq}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {form.formState.errors.recurrenceFrequency && <p className="text-sm text-destructive">{form.formState.errors.recurrenceFrequency.message}</p>}
+            </div>
+          )}
+        />
+      )}
       <div className="grid grid-cols-2 gap-4">
-        <div>
-          <Label htmlFor="startDate">Start Date</Label>
-          <Input id="startDate" type="date" {...form.register("startDate")} />
-          {form.formState.errors.startDate && <p className="text-sm text-destructive">{form.formState.errors.startDate.message}</p>}
-        </div>
-        <div>
-          <Label htmlFor="endDate">End Date</Label>
-          <Input id="endDate" type="date" {...form.register("endDate")} />
-          {form.formState.errors.endDate && <p className="text-sm text-destructive">{form.formState.errors.endDate.message}</p>}
-        </div>
+         <FormField
+          control={form.control}
+          name="startDate"
+          render={({ field }) => (
+            <div className="space-y-1">
+              <Label htmlFor="startDate">{isRecurring ? "Original Start Date" : "Start Date"}</Label>
+              <Input id="startDate" type="date" {...field} />
+              {form.formState.errors.startDate && <p className="text-sm text-destructive">{form.formState.errors.startDate.message}</p>}
+            </div>
+          )}
+        />
+        <FormField
+          control={form.control}
+          name="endDate"
+          render={({ field }) => (
+             <div className="space-y-1">
+              <Label htmlFor="endDate">{isRecurring ? "End of First Period" : "End Date"}</Label>
+              <Input id="endDate" type="date" {...field} />
+              {form.formState.errors.endDate && <p className="text-sm text-destructive">{form.formState.errors.endDate.message}</p>}
+            </div>
+          )}
+        />
       </div>
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
@@ -114,13 +208,75 @@ const BudgetForm: React.FC<{
   );
 };
 
+const AddCategoryDialog: React.FC<{
+  isOpen: boolean;
+  onOpenChange: (open: boolean) => void;
+  onAddCategory: (categoryName: string) => void;
+}> = ({ isOpen, onOpenChange, onAddCategory }) => {
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const { toast } = useToast();
+
+  const handleSubmit = () => {
+    if (!newCategoryName.trim()) {
+      toast({ title: "Error", description: "Category name cannot be empty.", variant: "destructive" });
+      return;
+    }
+    onAddCategory(newCategoryName.trim());
+    setNewCategoryName("");
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={isOpen} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Add New Category</DialogTitle>
+          <DialogDescription>Create a new category for your budgets and transactions.</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-2 py-4">
+          <Label htmlFor="newCategoryName">Category Name</Label>
+          <Input 
+            id="newCategoryName" 
+            value={newCategoryName} 
+            onChange={(e) => setNewCategoryName(e.target.value)}
+            placeholder="e.g., Subscriptions"
+          />
+        </div>
+        <DialogFooter>
+          <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+          <Button onClick={handleSubmit}>Add Category</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+
 export default function BudgetsPage() {
-  const [budgets, setBudgets] = useState<Budget[]>(mockBudgets); // Budgets still from mock, not DB
+  const [budgets, setBudgets] = useState<Budget[]>(mockBudgets);
   const [allTransactions, setAllTransactions] = useState<Transaction[]>([]);
   const [isLoadingTransactions, setIsLoadingTransactions] = useState(true);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingBudget, setEditingBudget] = useState<Budget | undefined>(undefined);
   const { toast } = useToast();
+
+  const [customCategories, setCustomCategories] = useState<string[]>([]);
+  const [isAddCategoryDialogOpen, setIsAddCategoryDialogOpen] = useState(false);
+
+  const [selectedBudgetId, setSelectedBudgetId] = useState<string | null>(null);
+  const [currentBudgetPeriods, setCurrentBudgetPeriods] = useState<Array<{ name: string; startDate: string; endDate: string }>>([]);
+  const [viewedPeriod, setViewedPeriod] = useState<{
+    budget: Budget; // The base budget definition
+    periodStartDate: string;
+    periodEndDate: string;
+    spent: number;
+    limit: number; // This is budget.limit
+  } | null>(null);
+
+  const availableCategories = useMemo(() => {
+    const combined = [...new Set([...defaultCategories, ...customCategories])];
+    return combined.sort((a,b) => a.localeCompare(b));
+  }, [customCategories]);
 
   const fetchDbTransactions = useCallback(async () => {
     setIsLoadingTransactions(true);
@@ -133,75 +289,269 @@ export default function BudgetsPage() {
     fetchDbTransactions();
   }, [fetchDbTransactions]);
 
-  const calculateSpentForBudget = useCallback((budget: Budget, transactions: Transaction[]): number => {
+  const calculateSpentForPeriod = useCallback((category: string, periodStartDate: string, periodEndDate: string, transactions: Transaction[]): number => {
     return transactions
       .filter(t => 
-        t.category === budget.category &&
-        t.amount < 0 && // Only expenses count towards budget
+        t.category === category &&
+        t.amount < 0 && 
         isWithinInterval(parseISO(t.date), { 
-          start: startOfDay(parseISO(budget.startDate)), 
-          end: endOfDay(parseISO(budget.endDate)) 
+          start: startOfDay(parseISO(periodStartDate)), 
+          end: endOfDay(parseISO(periodEndDate)) 
         })
       )
       .reduce((sum, t) => sum + Math.abs(t.amount), 0);
   }, []);
+  
+  const generateBudgetPeriods = useCallback((budget: Budget | undefined, numPast = 6, numFuture = 6): Array<{ name: string; startDate: string; endDate: string }> => {
+    if (!budget) return [];
+    
+    if (!budget.isRecurring || !budget.originalStartDate || !budget.recurrenceFrequency) {
+        return [{ name: "Budget Period", startDate: budget.startDate, endDate: budget.endDate }];
+    }
+
+    const periods: Array<{ name: string; startDate: string; endDate: string }> = [];
+    const today = new Date();
+    let currentPeriodStart = parseISO(budget.originalStartDate);
+
+    const addPeriod = (start: Date, end: Date, periodNameFormat: string) => {
+        periods.push({
+            name: format(start, periodNameFormat),
+            startDate: formatISO(startOfDay(start)),
+            endDate: formatISO(endOfDay(end))
+        });
+    };
+    
+    let iterationLimit = numPast + 1 + numFuture + 50; // Safety break
+
+    // Generate past periods up to numPast or until originalStartDate
+    let tempStart = parseISO(budget.originalStartDate);
+    const pastPeriodsTemp: Array<{ name: string; startDate: string; endDate: string }> = [];
+
+    while (isBefore(tempStart, today) && pastPeriodsTemp.length < numPast + 50 && iterationLimit-- > 0) { // Generate a bit more past to pick from
+        let periodEnd: Date;
+        let periodNameFmt = "MMM yyyy";
+        switch (budget.recurrenceFrequency) {
+            case 'weekly':
+                periodEnd = endOfWeek(tempStart, { weekStartsOn: 1 }); // Assuming week starts on Monday
+                periodNameFmt = "'Week of' MMM dd, yyyy";
+                break;
+            case 'biweekly':
+                periodEnd = addWeeks(tempStart, 2);
+                periodEnd = subMonths(addWeeks(tempStart,2),0); periodEnd.setDate(periodEnd.getDate()-1); // end of 2 weeks
+                periodNameFmt = "'Bi-Week of' MMM dd, yyyy";
+                break;
+            case 'monthly':
+                periodEnd = endOfMonth(tempStart);
+                periodNameFmt = "MMMM yyyy";
+                break;
+            case 'quarterly':
+                periodEnd = endOfQuarter(tempStart);
+                periodNameFmt = "QQQ yyyy";
+                break;
+            case 'annually':
+                periodEnd = endOfYear(tempStart);
+                periodNameFmt = "yyyy";
+                break;
+            default: return [];
+        }
+        if(isAfter(periodEnd, parseISO(budget.originalStartDate!))) { // ensure period end is not before original start
+             pastPeriodsTemp.push({
+                name: format(tempStart, periodNameFmt),
+                startDate: formatISO(startOfDay(tempStart)),
+                endDate: formatISO(endOfDay(periodEnd))
+            });
+        }
+
+        switch (budget.recurrenceFrequency) {
+            case 'weekly': tempStart = addWeeks(tempStart, 1); break;
+            case 'biweekly': tempStart = addWeeks(tempStart, 2); break;
+            case 'monthly': tempStart = addMonths(tempStart, 1); tempStart = startOfMonth(tempStart); break;
+            case 'quarterly': tempStart = addMonths(tempStart, 3); tempStart = startOfQuarter(tempStart); break;
+            case 'annually': tempStart = addYears(tempStart, 1); tempStart = startOfYear(tempStart); break;
+        }
+    }
+    
+    // Filter past periods: Get up to `numPast` periods ending before or during current period
+    const currentPeriodIndex = pastPeriodsTemp.findIndex(p => isWithinInterval(today, {start: parseISO(p.startDate), end: parseISO(p.endDate)}));
+    const startIndex = Math.max(0, currentPeriodIndex - numPast +1);
+    periods.push(...pastPeriodsTemp.slice(startIndex, currentPeriodIndex + 1));
+
+
+    // Generate future periods
+    currentPeriodStart = tempStart; // Start from where past generation left off (should be start of current or first future period)
+
+    for (let i = 0; i < numFuture && iterationLimit-- > 0; i++) {
+        let periodEnd: Date;
+        let periodNameFmt = "MMM yyyy";
+         switch (budget.recurrenceFrequency) {
+            case 'weekly':
+                periodEnd = endOfWeek(currentPeriodStart, { weekStartsOn: 1 });
+                periodNameFmt = "'Week of' MMM dd, yyyy";
+                break;
+            case 'biweekly':
+                periodEnd = addWeeks(currentPeriodStart, 2);
+                periodEnd = subMonths(addWeeks(currentPeriodStart,2),0); periodEnd.setDate(periodEnd.getDate()-1);
+                periodNameFmt = "'Bi-Week of' MMM dd, yyyy";
+                break;
+            case 'monthly':
+                periodEnd = endOfMonth(currentPeriodStart);
+                periodNameFmt = "MMMM yyyy";
+                break;
+            case 'quarterly':
+                periodEnd = endOfQuarter(currentPeriodStart);
+                periodNameFmt = "QQQ yyyy";
+                break;
+            case 'annually':
+                periodEnd = endOfYear(currentPeriodStart);
+                periodNameFmt = "yyyy";
+                break;
+            default: return [];
+        }
+        
+        periods.push({
+            name: format(currentPeriodStart, periodNameFmt),
+            startDate: formatISO(startOfDay(currentPeriodStart)),
+            endDate: formatISO(endOfDay(periodEnd))
+        });
+
+        switch (budget.recurrenceFrequency) {
+            case 'weekly': currentPeriodStart = addWeeks(currentPeriodStart, 1); break;
+            case 'biweekly': currentPeriodStart = addWeeks(currentPeriodStart, 2); break;
+            case 'monthly': currentPeriodStart = addMonths(currentPeriodStart, 1); currentPeriodStart = startOfMonth(currentPeriodStart); break;
+            case 'quarterly': currentPeriodStart = addMonths(currentPeriodStart, 3); currentPeriodStart = startOfQuarter(currentPeriodStart); break;
+            case 'annually': currentPeriodStart = addYears(currentPeriodStart, 1); currentPeriodStart = startOfYear(currentPeriodStart); break;
+        }
+    }
+    
+    // Ensure unique periods and sort them
+    const uniquePeriods = Array.from(new Set(periods.map(p => p.startDate)))
+      .map(date => periods.find(p => p.startDate === date)!)
+      .sort((a,b) => parseISO(a.startDate).getTime() - parseISO(b.startDate).getTime());
+
+    return uniquePeriods;
+
+  }, []);
+
 
   useEffect(() => {
-    // Recalculate spent amounts when transactions or budgets change
-    if (!isLoadingTransactions) {
-        const updatedBudgets = budgets.map(budget => ({
-        ...budget,
-        spent: calculateSpentForBudget(budget, allTransactions),
-      }));
-      // Only update if there's a change to avoid infinite loops if setBudgets causes re-render
-      if (JSON.stringify(updatedBudgets) !== JSON.stringify(budgets)) {
-        setBudgets(updatedBudgets);
+    if (selectedBudgetId) {
+      const budget = budgets.find(b => b.id === selectedBudgetId);
+      if (budget) {
+        const periods = generateBudgetPeriods(budget);
+        setCurrentBudgetPeriods(periods);
+        // Auto-select the current period or the latest past period if no current
+        const todayIso = formatISO(today);
+        let periodToView = periods.find(p => todayIso >= p.startDate && todayIso <= p.endDate);
+        if (!periodToView && periods.length > 0) {
+            // find the latest period that has already started or is current
+            const pastOrCurrentPeriods = periods.filter(p => parseISO(p.startDate) <= today);
+            if(pastOrCurrentPeriods.length > 0){
+                periodToView = pastOrCurrentPeriods[pastOrCurrentPeriods.length -1];
+            } else { // if all periods are in future, take the first one
+                periodToView = periods[0];
+            }
+        }
+
+        if (periodToView) {
+          const spent = calculateSpentForPeriod(budget.category, periodToView.startDate, periodToView.endDate, allTransactions);
+          setViewedPeriod({
+            budget,
+            periodStartDate: periodToView.startDate,
+            periodEndDate: periodToView.endDate,
+            spent,
+            limit: budget.limit,
+          });
+        } else {
+          setViewedPeriod(null);
+        }
+      } else {
+        setCurrentBudgetPeriods([]);
+        setViewedPeriod(null);
       }
+    } else {
+      setCurrentBudgetPeriods([]);
+      setViewedPeriod(null);
     }
-  }, [allTransactions, budgets, isLoadingTransactions, calculateSpentForBudget]);
+  }, [selectedBudgetId, budgets, allTransactions, calculateSpentForPeriod, generateBudgetPeriods]);
 
 
   const handleBudgetSubmit = (data: BudgetFormData, id?: string) => {
-    const budgetStartDate = startOfDay(parseISO(data.startDate)).toISOString();
-    const budgetEndDate = endOfDay(parseISO(data.endDate)).toISOString();
+    const baseBudgetProperties = {
+        name: data.name,
+        category: data.category,
+        limit: Number(data.limit),
+        isRecurring: data.isRecurring || false,
+        recurrenceFrequency: data.isRecurring ? data.recurrenceFrequency as BudgetRecurrenceFrequency : null,
+        originalStartDate: data.isRecurring ? formatISO(startOfDay(parseISO(data.startDate))) : null,
+    };
+
+    const periodStartDate = formatISO(startOfDay(parseISO(data.startDate)));
+    const periodEndDate = formatISO(endOfDay(parseISO(data.endDate)));
+    
+    const budgetWithPeriod: Omit<Budget, 'id' | 'spent'> = {
+        ...baseBudgetProperties,
+        startDate: periodStartDate,
+        endDate: periodEndDate,
+    };
+
 
     if (id) { // Editing existing budget
       setBudgets(prev => prev.map(b => b.id === id ? { 
         ...b, 
-        ...data, 
-        limit: Number(data.limit),
-        startDate: budgetStartDate,
-        endDate: budgetEndDate,
-        spent: calculateSpentForBudget({ ...b, ...data, startDate: budgetStartDate, endDate: budgetEndDate }, allTransactions)
+        ...budgetWithPeriod,
+        spent: calculateSpentForPeriod(budgetWithPeriod.category, budgetWithPeriod.startDate, budgetWithPeriod.endDate, allTransactions)
        } : b));
       toast({ title: "Budget Updated", description: `${data.name} has been updated.`});
     } else { // Creating new budget
-      const newBudgetBase: Omit<Budget, 'spent'> = {
-        id: `bud_${Date.now()}`,
-        ...data,
-        limit: Number(data.limit),
-        startDate: budgetStartDate,
-        endDate: budgetEndDate,
-      };
+      const newBudgetId = `bud_${Date.now()}`;
       const newBudget: Budget = {
-        ...newBudgetBase,
-        spent: calculateSpentForBudget(newBudgetBase, allTransactions),
+        id: newBudgetId,
+        ...budgetWithPeriod,
+        spent: calculateSpentForPeriod(budgetWithPeriod.category, budgetWithPeriod.startDate, budgetWithPeriod.endDate, allTransactions),
       };
       setBudgets(prev => [newBudget, ...prev]);
       toast({ title: "Budget Created", description: `${data.name} has been created.`});
+      setSelectedBudgetId(newBudgetId); // Auto-select the new budget
     }
     setIsFormOpen(false);
     setEditingBudget(undefined);
   };
 
-  const handleEditBudget = (budget: Budget) => {
-    setEditingBudget(budget);
+  const handleEditBudget = (budgetToEdit: Budget) => {
+    setEditingBudget(budgetToEdit);
     setIsFormOpen(true);
   };
   
   const handleDeleteBudget = (budgetId: string) => {
     setBudgets(prev => prev.filter(b => b.id !== budgetId));
+    if (selectedBudgetId === budgetId) {
+      setSelectedBudgetId(null); // Clear selection if deleted budget was selected
+    }
     toast({ title: "Budget Deleted", description: "The budget has been removed.", variant: "destructive" });
+  };
+
+  const handleAddCategory = (categoryName: string) => {
+    if (!customCategories.map(c => c.toLowerCase()).includes(categoryName.toLowerCase()) && !defaultCategories.map(c => c.toLowerCase()).includes(categoryName.toLowerCase())) {
+      setCustomCategories(prev => [...prev, categoryName]);
+      toast({ title: "Category Added", description: `${categoryName} has been added.` });
+    } else {
+      toast({ title: "Category Exists", description: `${categoryName} already exists.`, variant: "default" });
+    }
+  };
+
+  const handlePeriodSelect = (periodStartDate: string, periodEndDate: string) => {
+    if (!selectedBudgetId) return;
+    const budget = budgets.find(b => b.id === selectedBudgetId);
+    if (budget) {
+      const spent = calculateSpentForPeriod(budget.category, periodStartDate, periodEndDate, allTransactions);
+      setViewedPeriod({
+        budget,
+        periodStartDate,
+        periodEndDate,
+        spent,
+        limit: budget.limit,
+      });
+    }
   };
 
   if (isLoadingTransactions) {
@@ -210,145 +560,155 @@ export default function BudgetsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-semibold font-headline">My Budgets</h1>
-        <Dialog open={isFormOpen} onOpenChange={(open) => {
-          setIsFormOpen(open);
-          if (!open) setEditingBudget(undefined);
-        }}>
-          <DialogTrigger asChild>
-            <Button onClick={() => { setEditingBudget(undefined); setIsFormOpen(true); }}>
-              <PlusCircle className="mr-2 h-4 w-4" /> Create New Budget
+      <div className="flex flex-wrap justify-between items-center gap-4">
+        <div className="flex gap-2">
+            <Dialog open={isFormOpen} onOpenChange={(open) => {
+              setIsFormOpen(open);
+              if (!open) setEditingBudget(undefined);
+            }}>
+              <DialogTrigger asChild>
+                <Button onClick={() => { setEditingBudget(undefined); setIsFormOpen(true); }}>
+                  <PlusCircle className="mr-2 h-4 w-4" /> Create New Budget
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>{editingBudget ? "Edit Budget" : "Create New Budget"}</DialogTitle>
+                </DialogHeader>
+                <BudgetForm 
+                  onSubmitBudget={handleBudgetSubmit} 
+                  initialData={editingBudget}
+                  onClose={() => { setIsFormOpen(false); setEditingBudget(undefined);}}
+                  availableCategories={availableCategories}
+                />
+              </DialogContent>
+            </Dialog>
+            <Button variant="outline" onClick={() => setIsAddCategoryDialogOpen(true)}>
+                 <GripVertical className="mr-2 h-4 w-4" /> Add New Category
             </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>{editingBudget ? "Edit Budget" : "Create New Budget"}</DialogTitle>
-              <DialogDescription>
-                {editingBudget ? "Update the details of your budget." : "Set up a new budget to track your spending."}
-              </DialogDescription>
-            </DialogHeader>
-            <BudgetForm 
-              onSubmitBudget={handleBudgetSubmit} 
-              initialData={editingBudget}
-              onClose={() => { setIsFormOpen(false); setEditingBudget(undefined);}}
-            />
-          </DialogContent>
-        </Dialog>
+        </div>
+        <div className="min-w-[250px]">
+            <Select onValueChange={setSelectedBudgetId} value={selectedBudgetId || ""}>
+                <SelectTrigger><SelectValue placeholder="Choose a budget to view..." /></SelectTrigger>
+                <SelectContent>
+                    {budgets.map(b => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+                </SelectContent>
+            </Select>
+        </div>
       </div>
 
-      {budgets.length === 0 ? (
-        <Card className="text-center py-10">
+      <AddCategoryDialog 
+        isOpen={isAddCategoryDialogOpen}
+        onOpenChange={setIsAddCategoryDialogOpen}
+        onAddCategory={handleAddCategory}
+      />
+
+      {selectedBudgetId && currentBudgetPeriods.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><ListFilter className="h-5 w-5"/> Budget Periods for: {budgets.find(b=>b.id === selectedBudgetId)?.name}</CardTitle>
+            <CardDescription>Select a period to see details.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {currentBudgetPeriods.map(period => (
+                <Button 
+                  key={period.startDate} 
+                  variant={viewedPeriod?.periodStartDate === period.startDate ? "default" : "outline"}
+                  onClick={() => handlePeriodSelect(period.startDate, period.endDate)}
+                >
+                  {period.name}
+                </Button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {viewedPeriod ? (
+        <Card className="shadow-lg">
+          <CardHeader>
+            <div className="flex justify-between items-start">
+                <div>
+                    <CardTitle className="text-xl">{viewedPeriod.budget.name} - Period Details</CardTitle>
+                    <CardDescription>{viewedPeriod.budget.category}</CardDescription>
+                </div>
+                <div className="flex gap-1">
+                    <Button variant="ghost" size="icon" onClick={() => handleEditBudget(viewedPeriod.budget)}>
+                        <Edit className="h-4 w-4" /> <span className="sr-only">Edit Budget Definition</span>
+                    </Button>
+                    <Button variant="ghost" size="icon" onClick={() => handleDeleteBudget(viewedPeriod.budget.id)} className="text-destructive hover:text-destructive">
+                        <Trash2 className="h-4 w-4" /> <span className="sr-only">Delete Budget Definition</span>
+                    </Button>
+                </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="mb-2">
+              <span className="text-3xl font-bold">${viewedPeriod.spent.toFixed(2)}</span>
+              <span className="text-lg text-muted-foreground"> / ${viewedPeriod.limit.toFixed(2)}</span>
+            </div>
+            <Progress 
+              value={viewedPeriod.limit > 0 ? Math.min((viewedPeriod.spent / viewedPeriod.limit) * 100, 100) : 0} 
+              className="h-4" 
+              style={{ '--progress-color': viewedPeriod.spent > viewedPeriod.limit ? 'hsl(var(--destructive))' : (viewedPeriod.spent / viewedPeriod.limit > 0.75 ? 'hsl(var(--chart-4))' : 'hsl(var(--primary))') } as React.CSSProperties}
+            />
+            <p className={`mt-2 text-md ${viewedPeriod.spent > viewedPeriod.limit ? 'text-destructive' : 'text-muted-foreground'}`}>
+              {viewedPeriod.spent > viewedPeriod.limit 
+                ? `$${Math.abs(viewedPeriod.limit - viewedPeriod.spent).toFixed(2)} over budget` 
+                : `$${(viewedPeriod.limit - viewedPeriod.spent).toFixed(2)} remaining`}
+            </p>
+          </CardContent>
+          <CardFooter>
+            <p className="text-sm text-muted-foreground flex items-center gap-2">
+              <CalendarDays className="h-4 w-4"/>
+              Period: {format(parseISO(viewedPeriod.periodStartDate), 'MMM dd, yyyy')} - {format(parseISO(viewedPeriod.periodEndDate), 'MMM dd, yyyy')}
+            </p>
+          </CardFooter>
+        </Card>
+      ) : selectedBudgetId ? (
+         <Card className="text-center py-10">
           <CardContent className="flex flex-col items-center gap-4">
             <Target className="h-16 w-16 text-muted-foreground" />
-            <p className="text-muted-foreground">No budgets created yet.</p>
-            <Button onClick={() => { setEditingBudget(undefined); setIsFormOpen(true); }}>
-                Create Your First Budget
-            </Button>
+            <p className="text-muted-foreground">Select a period above to view budget details.</p>
+             {currentBudgetPeriods.length === 0 && <p className="text-sm text-muted-foreground">No periods generated for this budget yet, or budget definition issue.</p>}
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          {budgets.map((budget) => {
-            const progress = budget.limit > 0 ? (budget.spent / budget.limit) * 100 : 0;
-            const remaining = budget.limit - budget.spent;
-            const isOverBudget = budget.spent > budget.limit;
-            
-            let progressColor: string;
-            if (isOverBudget) progressColor = 'hsl(var(--destructive))';
-            else if (progress > 75) progressColor = 'hsl(var(--chart-4))'; // Using an orange-ish chart color for warning
-            else progressColor = 'hsl(var(--primary))';
-
-
-            return (
-              <Card key={budget.id} className="flex flex-col">
-                <CardHeader>
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <CardTitle>{budget.name}</CardTitle>
-                      <CardDescription>{budget.category}</CardDescription>
-                    </div>
-                     <div className="flex gap-1">
-                        <Button variant="ghost" size="icon" onClick={() => handleEditBudget(budget)}>
-                          <Edit className="h-4 w-4" /> <span className="sr-only">Edit</span>
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => handleDeleteBudget(budget.id)} className="text-destructive hover:text-destructive">
-                           <Trash2 className="h-4 w-4" /> <span className="sr-only">Delete</span>
-                        </Button>
-                      </div>
-                  </div>
-                </CardHeader>
-                <CardContent className="flex-grow">
-                  <div className="mb-2">
-                    <span className="text-2xl font-bold">${budget.spent.toFixed(2)}</span>
-                    <span className="text-sm text-muted-foreground"> / ${budget.limit.toFixed(2)}</span>
-                  </div>
-                  <Progress 
-                    value={Math.min(progress, 100)} 
-                    className="h-3" 
-                    style={{ '--progress-color': progressColor } as React.CSSProperties}
-                  />
-                   <style jsx global>{`
-                    .h-3 > div[role="progressbar"] {
-                      background-color: var(--progress-color) !important;
-                    }
-                  `}</style>
-
-
-                  <p className={`mt-2 text-sm ${isOverBudget ? 'text-destructive' : 'text-muted-foreground'}`}>
-                    {isOverBudget 
-                      ? `$${Math.abs(remaining).toFixed(2)} over budget` 
-                      : `$${remaining.toFixed(2)} remaining`}
-                  </p>
-                </CardContent>
-                <CardFooter>
-                  <p className="text-xs text-muted-foreground">
-                    {format(parseISO(budget.startDate), 'MMM dd')} - {format(parseISO(budget.endDate), 'MMM dd, yyyy')}
-                  </p>
-                </CardFooter>
-              </Card>
-            );
-          })}
-        </div>
+         <Card className="text-center py-10">
+          <CardContent className="flex flex-col items-center gap-4">
+            <Target className="h-16 w-16 text-muted-foreground" />
+            <p className="text-muted-foreground">No budget selected. Choose a budget from the dropdown or create a new one.</p>
+          </CardContent>
+        </Card>
       )}
-      <Card>
+       <Card>
         <CardHeader><CardTitle>Note on Budget Data</CardTitle></CardHeader>
         <CardContent>
             <p className="text-sm text-muted-foreground">
-                Budget definitions are currently managed in memory (using mock data as a base) and are not persisted in the database.
-                However, the "spent" amounts for these budgets are calculated using transaction data fetched from the SQLite database.
+                Budget definitions (including recurrence rules and custom categories) are currently managed in memory and are not persisted in the database.
+                The "spent" amounts for these budgets are calculated using transaction data fetched from the SQLite database for the selected period.
             </p>
         </CardContent>
       </Card>
+       <style jsx global>{`
+        .h-3 > div[role="progressbar"], .h-4 > div[role="progressbar"] {
+          background-color: var(--progress-color) !important;
+        }
+      `}</style>
     </div>
   );
 }
 
-// Custom style for Progress component's indicator
+// isValid is not directly available from date-fns root, it's a named export.
+// This is already handled by the import.
+
+// Global style for Progress component indicator.
+// The inline style with CSS variable is a common workaround.
 const GlobalProgressStyle = () => (
   <style jsx global>{`
-    .h-3 > div[role="progressbar"] {
+    .h-3 > div[role="progressbar"], .h-4 > div[role="progressbar"] {
       background-color: var(--progress-color) !important;
     }
   `}</style>
 );
-
-// This should be placed in your RootLayout or a global CSS file if not already handled by Tailwind.
-// However, for ShadCN Progress, direct style manipulation on the Indicator is often needed if you want dynamic colors beyond primary.
-// The provided Progress component's styling might make this tricky.
-// The inline style with CSS variable is a common workaround.
-// The provided `Progress` component from shadcn uses `bg-primary` for the indicator.
-// To override it dynamically, we can pass a style prop with a CSS variable like above.
-// And ensure that the `ProgressPrimitive.Indicator` in `progress.tsx` can accept this.
-// It seems the current `Progress` component in `components/ui/progress.tsx` is:
-// <ProgressPrimitive.Indicator
-// className="h-full w-full flex-1 bg-primary transition-all"
-// style={{ transform: `translateX(-${100 - (value || 0)}%)` }}
-// />
-// To make the color dynamic via CSS variable, we'd ideally change `bg-primary` to something like `bg-[var(--progress-color)]`
-// and ensure `--progress-color` is defined.
-// For now, the inline style approach combined with a <style jsx global> tag as shown above is a workaround.
-// A cleaner solution would be to modify the Progress component itself to accept a color prop or use a CSS variable for its background.
-// Given the constraints, the `style={{ '--progress-color': progressColor } as React.CSSProperties}` on the Progress component
-// and the `<style jsx global>` should work.
-

@@ -1,5 +1,6 @@
 
 import type { Account, Transaction, Budget } from './types';
+import { formatISO, startOfMonth, endOfMonth, addMonths, subMonths } from 'date-fns';
 
 export const mockAccounts: Account[] = [
   {
@@ -42,8 +43,7 @@ export const mockAccounts: Account[] = [
   },
 ];
 
-// Use a fixed date to ensure consistency between server and client renders for mock data
-const today = new Date('2024-07-15T12:00:00.000Z');
+const today = new Date('2024-07-15T12:00:00.000Z'); // Use a fixed date for mock data consistency
 
 const getDateString = (daysAgo: number): string => {
   const date = new Date(today);
@@ -144,34 +144,59 @@ export const mockTransactions: Transaction[] = [
   }
 ];
 
+const currentMonthStart = startOfMonth(today);
+const currentMonthEnd = endOfMonth(today);
+const prevMonthStart = startOfMonth(subMonths(today,1));
+const prevMonthEnd = endOfMonth(subMonths(today,1));
+
+
 export const mockBudgets: Budget[] = [
   {
     id: 'bud_1',
     name: 'Monthly Groceries',
     category: 'Groceries',
     limit: 400,
-    spent: mockTransactions.filter(t => t.category === 'Groceries' && t.amount < 0 && new Date(t.date) >= new Date(today.getFullYear(), today.getMonth(), 1) && new Date(t.date) <= new Date(today.getFullYear(), today.getMonth() + 1, 0)).reduce((sum, t) => sum + Math.abs(t.amount), 0),
-    startDate: new Date(today.getFullYear(), today.getMonth(), 1).toISOString(),
-    endDate: new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString(),
+    spent: 0, // Will be calculated dynamically
+    startDate: formatISO(currentMonthStart),
+    endDate: formatISO(currentMonthEnd),
+    isRecurring: true,
+    recurrenceFrequency: 'monthly',
+    originalStartDate: formatISO(startOfMonth(new Date(2024,0,1))), // January 1st, 2024
   },
   {
     id: 'bud_2',
     name: 'Eating Out',
     category: 'Food & Drink',
     limit: 250,
-    spent: mockTransactions.filter(t => t.category === 'Food & Drink' && t.amount < 0 && new Date(t.date) >= new Date(today.getFullYear(), today.getMonth(), 1) && new Date(t.date) <= new Date(today.getFullYear(), today.getMonth() + 1, 0)).reduce((sum, t) => sum + Math.abs(t.amount), 0),
-    startDate: new Date(today.getFullYear(), today.getMonth(), 1).toISOString(),
-    endDate: new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString(),
+    spent: 0,
+    startDate: formatISO(currentMonthStart),
+    endDate: formatISO(currentMonthEnd),
+    isRecurring: true,
+    recurrenceFrequency: 'monthly',
+    originalStartDate: formatISO(startOfMonth(new Date(2024,0,1))),
   },
   {
     id: 'bud_3',
-    name: 'Shopping',
+    name: 'Shopping Spree (Non-recurring)',
     category: 'Shopping',
     limit: 300,
-    spent: mockTransactions.filter(t => t.category === 'Shopping' && t.amount < 0 && new Date(t.date) >= new Date(today.getFullYear(), today.getMonth(), 1) && new Date(t.date) <= new Date(today.getFullYear(), today.getMonth() + 1, 0)).reduce((sum, t) => sum + Math.abs(t.amount), 0),
-    startDate: new Date(today.getFullYear(), today.getMonth(), 1).toISOString(),
-    endDate: new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString(),
+    spent: 0,
+    startDate: formatISO(prevMonthStart), // Example non-recurring from last month
+    endDate: formatISO(prevMonthEnd),
+    isRecurring: false,
   },
+  {
+    id: 'bud_4',
+    name: 'Weekly Transport',
+    category: 'Transportation',
+    limit: 75,
+    spent: 0,
+    startDate: formatISO(today), // Placeholder, will be dynamic for periods
+    endDate: formatISO(today),   // Placeholder
+    isRecurring: true,
+    recurrenceFrequency: 'weekly',
+    originalStartDate: formatISO(new Date('2024-01-01T00:00:00.000Z')),
+  }
 ];
 
 export const transactionCategories: string[] = [
@@ -191,4 +216,5 @@ export const transactionCategories: string[] = [
   "Investments",
   "Business Expense",
   "Other",
+  "Uncategorized" // Added Uncategorized as a default
 ];

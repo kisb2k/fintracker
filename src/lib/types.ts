@@ -20,14 +20,24 @@ export type Transaction = {
   sourceFileName?: string | null; // Name of the file it came from, or e.g. "Manual Entry"
 };
 
+export type BudgetRecurrenceFrequency = 'weekly' | 'biweekly' | 'monthly' | 'quarterly' | 'annually';
+
 export type Budget = {
   id: string;
   name: string;
   category: string;
   limit: number;
-  spent: number;
-  startDate: string; // ISO string
-  endDate: string; // ISO string
+  spent: number; // This will be 'spent' for the currently selected/viewed period
+  
+  // For non-recurring, these define the single period
+  // For recurring, these will be dynamically set for the selected period instance
+  startDate: string; 
+  endDate: string; 
+
+  // Fields for recurrence
+  isRecurring?: boolean;
+  recurrenceFrequency?: BudgetRecurrenceFrequency | null;
+  originalStartDate?: string | null; // The very first start date of a recurring series
 };
 
 // For AI Insights
@@ -56,3 +66,4 @@ export type AccountFormData = {
   type: Account['type'];
   lastFour?: string | null;
 };
+
