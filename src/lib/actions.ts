@@ -22,6 +22,12 @@ export async function addAccount(accountData: AccountFormData): Promise<{ accoun
   const db = await getDb();
   const id = crypto.randomUUID();
   try {
+    // Check if an account with the same name already exists
+    const existingAccountWithName = await db.get<Account>('SELECT id FROM accounts WHERE LOWER(name) = LOWER(?)', accountData.name);
+    if (existingAccountWithName) {
+        return { account: null, error: `An account with the name "${accountData.name}" already exists.` };
+    }
+
     await db.run(
       'INSERT INTO accounts (id, name, bankName, balance, type, lastFour) VALUES (?, ?, ?, ?, ?, ?)',
       id,
@@ -36,11 +42,11 @@ export async function addAccount(accountData: AccountFormData): Promise<{ accoun
   } catch (error: any) {
     console.error('Failed to add account:', error);
     if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY' || error.message?.includes('UNIQUE constraint failed: accounts.id')) {
-        console.warn(`Account with id ${id} already exists. Fetching existing.`);
+        // This case should be rare with UUIDs but handle defensively
         const existingAccount = await db.get<Account>('SELECT * FROM accounts WHERE id = ?', id);
         return { account: existingAccount || null, error: `Account with ID ${id} already exists.` };
     }
-    // Check for other unique constraints, e.g., if you add one for account name
+    // Check for other unique constraints, e.g., if you add one for account name (already handled above but good for other potential unique fields)
     if (error.message?.includes('UNIQUE constraint failed: accounts.name')) {
          return { account: null, error: `An account with the name "${accountData.name}" already exists.` };
     }
@@ -54,7 +60,7 @@ export async function updateAccountDetails(accountId: string, data: AccountFormD
     // Check if an account with the new name already exists (if name is being changed and is not the current account's name)
     const currentAccount = await db.get<Account>('SELECT name FROM accounts WHERE id = ?', accountId);
     if (data.name !== currentAccount?.name) {
-        const existingAccountWithName = await db.get<Account>('SELECT id FROM accounts WHERE name = ? AND id != ?', data.name, accountId);
+        const existingAccountWithName = await db.get<Account>('SELECT id FROM accounts WHERE LOWER(name) = LOWER(?) AND id != ?', data.name, accountId);
         if (existingAccountWithName) {
             return { success: false, error: `An account with the name "${data.name}" already exists.` };
         }
@@ -72,7 +78,7 @@ export async function updateAccountDetails(accountId: string, data: AccountFormD
     return { success: true, account: updatedAccount };
   } catch (error: any) {
     console.error(`Failed to update account ${accountId}:`, error);
-     if (error.message?.includes('UNIQUE constraint failed: accounts.name')) {
+     if (error.message?.includes('UNIQUE constraint failed: accounts.name')) { // Should be caught by above check, but as fallback
          return { success: false, error: `An account with the name "${data.name}" already exists.` };
     }
     return { success: false, error: error.message || 'Failed to update account.' };
@@ -203,7 +209,7 @@ export async function addTransactionsBatch(
     console.error('Batch transaction insert failed, rolling back:', batchError);
     await db.exec('ROLLBACK');
     errors.push({ error: `Batch operation failed: ${(batchError as Error).message}` });
-    successCount = 0;
+    successCount = 0; // Reset success count on full batch failure
   }
 
   for (const accountId of affectedAccountIds) {
@@ -270,36 +276,16 @@ export async function recalculateAllAccountBalances(): Promise<void> {
 export async function removeDuplicateTransactions(): Promise<{ success: boolean; duplicatesRemoved?: number; error?: string }> {
   const db = await getDb();
   try {
-    const duplicateGroupIds = await db.all<{ id: string }>(`
-      SELECT T1.id
-      FROM transactions T1
-      INNER JOIN (
-          SELECT accountId, date(date) as transaction_date, amount, description, COUNT(*) as count, MIN(id) as min_id
+    // Select IDs of transactions that are duplicates (keeping the one with MIN(id) for each group)
+    const rowsToDelete = await db.all<{ id: string }>(`
+      SELECT id
+      FROM transactions
+      WHERE id NOT IN (
+          SELECT MIN(id)
           FROM transactions
-          GROUP BY accountId, date(transaction_date), amount, description
-          HAVING COUNT(*) > 1
-      ) T2 ON T1.accountId = T2.accountId
-            AND date(T1.date) = T2.transaction_date
-            AND T1.amount = T2.amount
-            AND T1.description = T2.description;
+          GROUP BY accountId, date(date), amount, description
+      );
     `);
-
-    if (duplicateGroupIds.length === 0) {
-      return { success: true, duplicatesRemoved: 0 };
-    }
-
-    const duplicateIdList = duplicateGroupIds.map(row => `'${row.id}'`).join(',');
-    const queryForIdsToDelete = `
-        SELECT id
-        FROM transactions
-        WHERE id IN (${duplicateIdList})
-        AND id NOT IN (
-            SELECT MIN(id)
-            FROM transactions
-            GROUP BY accountId, date(date), amount, description
-        )
-    `;
-    const rowsToDelete = await db.all<{ id: string }>(queryForIdsToDelete);
 
     if (rowsToDelete.length === 0) {
       return { success: true, duplicatesRemoved: 0 };
@@ -311,6 +297,7 @@ export async function removeDuplicateTransactions(): Promise<{ success: boolean;
     const numRemoved = deleteResult.changes || 0;
     console.log(`Removed ${numRemoved} duplicate transactions.`);
 
+    // After removing duplicates, recalculate all account balances
     await recalculateAllAccountBalances();
 
     return { success: true, duplicatesRemoved: numRemoved };
@@ -347,12 +334,14 @@ export async function deleteTransactionsBatch(transactionIds: string[]): Promise
   }
   const db = await getDb();
   try {
+    // Get distinct account IDs of transactions to be deleted *before* deleting them
     const placeholders = transactionIds.map(() => '?').join(',');
-    const transactions = await db.all<Transaction>(`SELECT DISTINCT accountId FROM transactions WHERE id IN (${placeholders})`, ...transactionIds);
-    const affectedAccountIds = new Set(transactions.map(t => t.accountId));
+    const transactionsBeingDeleted = await db.all<{ accountId: string }>(`SELECT DISTINCT accountId FROM transactions WHERE id IN (${placeholders})`, ...transactionIds);
+    const affectedAccountIds = new Set(transactionsBeingDeleted.map(t => t.accountId));
 
     const result = await db.run(`DELETE FROM transactions WHERE id IN (${placeholders})`, ...transactionIds);
 
+    // Recalculate balances for all accounts that were affected
     for (const accountId of affectedAccountIds) {
       await recalculateAndUpdateAccountBalance(accountId);
     }
@@ -371,6 +360,7 @@ export async function updateMultipleTransactionFields(
     date?: string;
     description?: string;
     amount?: number;
+    accountId?: string; // Added accountId for updating
   }
 ): Promise<{ success: boolean; count?: number; error?: string }> {
   if (transactionIds.length === 0) {
@@ -382,26 +372,18 @@ export async function updateMultipleTransactionFields(
 
   const db = await getDb();
   let updatedCount = 0;
+  const allAffectedAccountIds = new Set<string>();
 
   try {
     await db.exec('BEGIN TRANSACTION');
 
-    const affectedAccountIds = new Set<string>();
-
     for (const id of transactionIds) {
-      const currentTransaction = await db.get<Transaction>('SELECT * FROM transactions WHERE id = ?', id);
+      const currentTransaction = await db.get<Transaction>('SELECT accountId FROM transactions WHERE id = ?', id);
       if (!currentTransaction) {
         console.warn(`Transaction with id ${id} not found for update.`);
         continue;
       }
-      affectedAccountIds.add(currentTransaction.accountId); // Original account
-
-      const newValues = { ...currentTransaction, ...updates };
-      if (updates.amount !== undefined && currentTransaction.accountId !== newValues.accountId) {
-        // If amount changes AND accountId changes, also track the new accountId for recalc
-         if (newValues.accountId) affectedAccountIds.add(newValues.accountId);
-      }
-
+      allAffectedAccountIds.add(currentTransaction.accountId); // Add original account ID
 
       const setClauses: string[] = [];
       const params: (string | number | null)[] = [];
@@ -422,6 +404,11 @@ export async function updateMultipleTransactionFields(
         setClauses.push('amount = ?');
         params.push(updates.amount);
       }
+      if (updates.accountId !== undefined) {
+        setClauses.push('accountId = ?');
+        params.push(updates.accountId);
+        allAffectedAccountIds.add(updates.accountId); // Add new account ID if changed
+      }
 
       if (setClauses.length > 0) {
         params.push(id);
@@ -435,8 +422,8 @@ export async function updateMultipleTransactionFields(
 
     await db.exec('COMMIT');
 
-    // Recalculate balances for all affected accounts
-    for (const accountId of affectedAccountIds) {
+    // Recalculate balances for all affected accounts (original and new)
+    for (const accountId of allAffectedAccountIds) {
       await recalculateAndUpdateAccountBalance(accountId);
     }
 

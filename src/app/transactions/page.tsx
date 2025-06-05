@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import type { ColumnDef, RowSelectionState } from "@tanstack/react-table";
-import { ArrowUpDown, Eye, Sparkles, UploadCloud, Trash2, AlertCircle, PlusCircle, MoreHorizontal, Settings2, Edit3, Edit } from "lucide-react";
+import { ArrowUpDown, Eye, Sparkles, UploadCloud, Trash2, AlertCircle, PlusCircle, MoreHorizontal, Settings2, Edit } from "lucide-react"; // Edit3 removed as Edit is used.
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DataTable } from "@/components/ui/data-table";
@@ -379,6 +379,8 @@ const FileUploadDialog: React.FC<{
   useEffect(() => {
     if (isOpen && existingAccounts.length > 0 && !selectedAccountId) {
       setSelectedAccountId(existingAccounts[0].id);
+    } else if (isOpen && existingAccounts.length === 0) {
+        setSelectedAccountId(""); // Clear selection if no accounts
     }
   }, [isOpen, existingAccounts, selectedAccountId]);
 
@@ -429,7 +431,7 @@ const FileUploadDialog: React.FC<{
           headerLine.split(',').map(h => h.trim()),
           dataLines,
           mappingResult,
-          selectedAccountId, // Pass the selected account ID
+          selectedAccountId, 
           statementType
         );
 
@@ -453,7 +455,7 @@ const FileUploadDialog: React.FC<{
       } finally {
         setIsProcessing(false);
         if (fileInputRef.current) fileInputRef.current.value = "";
-        setSelectedAccountId(existingAccounts.length > 0 ? existingAccounts[0].id : ""); // Reset selection
+        setSelectedAccountId(existingAccounts.length > 0 ? existingAccounts[0].id : ""); 
       }
     };
     reader.onerror = () => {
@@ -468,7 +470,7 @@ const FileUploadDialog: React.FC<{
     actualHeader: string[],
     dataLines: string[],
     mapping: MapCsvHeaderOutput,
-    csvAccountId: string, // Use the passed accountId
+    csvAccountId: string, 
     selectedStatementType: StatementType
   ): Omit<Transaction, 'id' | 'loadTimestamp' | 'sourceFileName'>[] => {
 
@@ -524,6 +526,7 @@ const FileUploadDialog: React.FC<{
       if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'MM/dd/yyyy', new Date());
       if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'dd-MM-yyyy', new Date());
       if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'M/d/yy', new Date());
+      if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'yyyy/MM/dd', new Date()); // Added another common format
 
       if (!isValid(parsedDate)) {
           console.warn(`Skipping row ${i+1} due to invalid date format: ${dateStr}`);
@@ -546,7 +549,7 @@ const FileUploadDialog: React.FC<{
       let category = getStringValue(columnIndexMap.Category, values) || "Uncategorized";
 
       transactions.push({
-        accountId: csvAccountId, // Use the selected account ID
+        accountId: csvAccountId, 
         date: parsedDate.toISOString(),
         description: getStringValue(columnIndexMap.Description, values) || "N/A",
         amount: finalAmount,
@@ -607,7 +610,7 @@ const FileUploadDialog: React.FC<{
               </div>
             </RadioGroup>
           </div>
-          <Input type="file" accept=".csv" onChange={handleFileChange} disabled={isProcessing || existingAccounts.length === 0} ref={fileInputRef} />
+          <Input type="file" accept=".csv" onChange={handleFileChange} disabled={isProcessing || existingAccounts.length === 0 || !selectedAccountId} ref={fileInputRef} />
           {isProcessing && <p className="text-sm text-muted-foreground mt-2">Processing file with AI...</p>}
           <p className="text-xs text-muted-foreground mt-2">
             The system will attempt to automatically map your CSV columns.
@@ -713,6 +716,7 @@ const bulkTransactionUpdateFormSchema = z.object({
   description: z.string().optional(),
   amount: z.string().optional().refine(val => !val || !isNaN(parseFloat(val)), { message: "Amount must be a valid number"}),
   category: z.string().optional(),
+  accountId: z.string().optional(),
 });
 
 type BulkTransactionUpdateFormData = z.infer<typeof bulkTransactionUpdateFormSchema>;
@@ -722,7 +726,8 @@ const BulkTransactionUpdateDialog: React.FC<{
   onOpenChange: (open: boolean) => void;
   selectedTransactionIds: string[];
   onUpdateComplete: () => void;
-}> = ({ isOpen, onOpenChange, selectedTransactionIds, onUpdateComplete }) => {
+  accounts: Account[];
+}> = ({ isOpen, onOpenChange, selectedTransactionIds, onUpdateComplete, accounts }) => {
   const { toast } = useToast();
   const [isUpdating, setIsUpdating] = useState(false);
 
@@ -733,16 +738,18 @@ const BulkTransactionUpdateDialog: React.FC<{
       description: "",
       amount: "",
       category: "",
+      accountId: "",
     }
   });
 
  useEffect(() => {
     if (isOpen) {
-      form.reset({ // Reset form when dialog opens
+      form.reset({ 
         date: "",
         description: "",
         amount: "",
         category: "",
+        accountId: "",
       });
     }
   }, [isOpen, form]);
@@ -754,11 +761,13 @@ const BulkTransactionUpdateDialog: React.FC<{
       return;
     }
     
-    const updates: { category?: string; date?: string; description?: string; amount?: number; } = {};
+    const updates: { category?: string; date?: string; description?: string; amount?: number; accountId?: string;} = {};
     if (data.category) updates.category = data.category;
     if (data.date) updates.date = parseISO(data.date).toISOString();
-    if (data.description) updates.description = data.description;
-    if (data.amount) updates.amount = parseFloat(data.amount);
+    if (data.description && data.description.trim() !== "") updates.description = data.description;
+    if (data.amount && data.amount.trim() !== "") updates.amount = parseFloat(data.amount);
+    if (data.accountId) updates.accountId = data.accountId;
+
 
     if (Object.keys(updates).length === 0) {
       toast({ title: "No Changes", description: "Please provide at least one field to update.", variant: "default"});
@@ -781,7 +790,7 @@ const BulkTransactionUpdateDialog: React.FC<{
     <Dialog open={isOpen} onOpenChange={(open) => { onOpenChange(open); if (!open) form.reset();}}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Bulk Update Transactions</DialogTitle>
+          <DialogTitle>Update Transaction Data</DialogTitle>
           <DialogDescription>
             Update fields for {selectedTransactionIds.length} selected transaction(s). Only filled fields will be updated.
           </DialogDescription>
@@ -816,7 +825,7 @@ const BulkTransactionUpdateDialog: React.FC<{
             render={({ field }) => (
               <FormItem>
                 <RHFFormLabel>New Amount (Optional)</RHFFormLabel>
-                <FormControl><Input type="number" step="0.01" placeholder="Enter new amount (e.g., -25.50 or 100)" {...field} /></FormControl>
+                <FormControl><Input type="number" step="0.01" placeholder="e.g., -25.50 or 100" {...field} /></FormControl>
                 <FormMessage />
               </FormItem>
             )}
@@ -831,6 +840,22 @@ const BulkTransactionUpdateDialog: React.FC<{
                   <FormControl><SelectTrigger><SelectValue placeholder="Select new category" /></SelectTrigger></FormControl>
                   <SelectContent>
                     {allCategories.map(cat => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+           <FormField
+            control={form.control}
+            name="accountId"
+            render={({ field }) => (
+              <FormItem>
+                <RHFFormLabel>New Account (Optional)</RHFFormLabel>
+                <Select onValueChange={field.onChange} value={field.value || ""}>
+                  <FormControl><SelectTrigger><SelectValue placeholder="Select new account" /></SelectTrigger></FormControl>
+                  <SelectContent>
+                    {accounts.map(acc => <SelectItem key={acc.id} value={acc.id}>{acc.name} ({acc.bankName})</SelectItem>)}
                   </SelectContent>
                 </Select>
                 <FormMessage />
@@ -1040,7 +1065,6 @@ export default function TransactionsPage() {
               <DropdownMenuItem onClick={() => handleOpenInsights(transaction)}>
                 <Sparkles className="mr-2 h-4 w-4" /> AI Insights
               </DropdownMenuItem>
-              {/* We can add an "Edit" item here later if single transaction edit is needed */}
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => setTransactionToDeleteId(transaction.id)}
@@ -1119,6 +1143,7 @@ export default function TransactionsPage() {
         onOpenChange={setIsBulkUpdateOpen}
         selectedTransactionIds={selectedTransactionIds}
         onUpdateComplete={fetchData}
+        accounts={accounts}
       />
 
       <AlertDialog open={!!transactionToDeleteId} onOpenChange={(open) => !open && setTransactionToDeleteId(null)}>
