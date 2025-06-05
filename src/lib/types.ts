@@ -2,10 +2,10 @@
 export type Account = {
   id: string;
   name: string;
-  bankName: string; 
+  bankName: string;
   balance: number;
   type: 'checking' | 'savings' | 'credit card' | 'cash' | 'crypto' | 'other' | 'investment' | 'loan';
-  lastFour?: string; 
+  lastFour?: string | null; // Allow null for optional lastFour
 };
 
 export type Transaction = {
@@ -47,4 +47,12 @@ export type UnusualSpendingInfo = {
   detected: boolean;
   explanation: string;
   suggestions: string;
+};
+
+// For Account Forms
+export type AccountFormData = {
+  name: string;
+  bankName: string;
+  type: Account['type'];
+  lastFour?: string | null;
 };

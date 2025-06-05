@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import type { ColumnDef, RowSelectionState } from "@tanstack/react-table";
-import { ArrowUpDown, Eye, Sparkles, UploadCloud, Trash2, AlertCircle, PlusCircle, MoreHorizontal, Settings2, Edit3 } from "lucide-react";
+import { ArrowUpDown, Eye, Sparkles, UploadCloud, Trash2, AlertCircle, PlusCircle, MoreHorizontal, Settings2, Edit3, Edit } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DataTable } from "@/components/ui/data-table";
@@ -41,11 +41,11 @@ import {
 import {
   Form,
   FormControl,
-  FormField, 
-  FormItem, 
+  FormField,
+  FormItem,
   FormLabel as RHFFormLabel,
-  FormMessage, 
-  FormDescription, 
+  FormMessage,
+  FormDescription,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -57,7 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { format, parse, parseISO, isValid } from 'date-fns';
@@ -68,18 +68,18 @@ import { REQUIRED_TRANSACTION_FIELDS } from '@/lib/constants';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from '@/components/ui/badge';
 import { useToast } from "@/hooks/use-toast";
-import { 
-  getAccounts, 
-  addAccount, 
-  getTransactions, 
-  addTransaction, 
+import {
+  getAccounts,
+  addAccount,
+  getTransactions,
+  addTransaction,
   addTransactionsBatch,
   recalculateAndUpdateAccountBalance,
   recalculateAllAccountBalances,
   removeDuplicateTransactions,
   deleteTransaction as deleteTransactionAction,
   deleteTransactionsBatch as deleteTransactionsBatchAction,
-  updateTransactionCategoryBatch as updateTransactionCategoryBatchAction,
+  updateMultipleTransactionFields,
 } from '@/lib/actions';
 
 const transactionFormSchema = z.object({
@@ -95,10 +95,10 @@ type TransactionFormData = z.infer<typeof transactionFormSchema>;
 
 type StatementType = "debit" | "credit";
 
-const AddTransactionFormDialog: React.FC<{ 
+const AddTransactionFormDialog: React.FC<{
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
-  onTransactionAdded: () => void; 
+  onTransactionAdded: () => void;
   accounts: Account[];
 }> = ({ isOpen, onOpenChange, onTransactionAdded, accounts }) => {
   const { toast } = useToast();
@@ -115,7 +115,7 @@ const AddTransactionFormDialog: React.FC<{
   });
 
   useEffect(() => {
-    if (isOpen) { // Reset form when dialog opens and ensure accountId is set if accounts exist
+    if (isOpen) {
         form.reset({
             description: "",
             amount: 0,
@@ -131,18 +131,18 @@ const AddTransactionFormDialog: React.FC<{
   const onSubmit = async (data: TransactionFormData) => {
     const newTransactionData: Omit<Transaction, 'id' | 'loadTimestamp' | 'sourceFileName'> = {
       accountId: data.accountId,
-      date: new Date(data.date).toISOString(), 
+      date: new Date(data.date).toISOString(),
       description: data.description,
       amount: data.type === 'expense' ? -Math.abs(data.amount) : Math.abs(data.amount),
       category: data.category,
-      status: 'posted', 
+      status: 'posted',
     };
-    
+
     const result = await addTransaction(newTransactionData);
     if (result) {
       toast({ title: "Transaction Added", description: `${data.description} successfully added.` });
-      onTransactionAdded(); 
-      onOpenChange(false); 
+      onTransactionAdded();
+      onOpenChange(false);
     } else {
       toast({ title: "Error", description: "Failed to add transaction.", variant: "destructive" });
     }
@@ -237,7 +237,7 @@ const AddTransactionFormDialog: React.FC<{
                         {accounts.map(acc => <SelectItem key={acc.id} value={acc.id}>{acc.name} ({acc.bankName})</SelectItem>)}
                       </SelectContent>
                     </Select>
-                    {accounts.length === 0 && <FormDescription>No accounts available. Create accounts via CSV upload.</FormDescription>}
+                    {accounts.length === 0 && <FormDescription>No accounts available. Create accounts via CSV upload or on the Accounts page.</FormDescription>}
                     <FormMessage />
                   </FormItem>
                 )}
@@ -255,7 +255,7 @@ const AddTransactionFormDialog: React.FC<{
 };
 
 
-const TransactionInsightsDialog: React.FC<{ 
+const TransactionInsightsDialog: React.FC<{
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   transaction: Transaction | null;
@@ -300,13 +300,13 @@ const TransactionInsightsDialog: React.FC<{
     setTaxResult(null);
     try {
       const result = await identifyTaxDeductions({ transactionData: JSON.stringify([transaction]) });
-      const deductions = JSON.parse(result.taxDeductions) as TaxDeductionInfo[]; 
-      const relevantDeductions = deductions.filter(d => d.transactionId === transaction.id || !d.transactionId); 
+      const deductions = JSON.parse(result.taxDeductions) as TaxDeductionInfo[];
+      const relevantDeductions = deductions.filter(d => d.transactionId === transaction.id || !d.transactionId);
       setTaxResult(relevantDeductions.length > 0 ? relevantDeductions : []);
     } catch (e) {
       console.error("Tax deduction error:", e);
       setError("Failed to identify tax deductions or parse result.");
-      setTaxResult([]); 
+      setTaxResult([]);
     }
     setIsLoadingTax(false);
   };
@@ -322,7 +322,7 @@ const TransactionInsightsDialog: React.FC<{
         </DialogHeader>
         <div className="space-y-4 py-4">
           {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
-          
+
           <div>
             <h3 className="font-semibold mb-2">Smart Categorization</h3>
             <Button onClick={handleCategorize} disabled={isLoadingCategory} size="sm">
@@ -351,7 +351,7 @@ const TransactionInsightsDialog: React.FC<{
                 </AlertDescription>
               </Alert>
             )}
-            {taxResult && taxResult.length === 0 && !isLoadingTax && !error && ( 
+            {taxResult && taxResult.length === 0 && !isLoadingTax && !error && (
               <p className="text-sm text-muted-foreground mt-2">No specific tax deduction identified for this transaction by the AI.</p>
             )}
           </div>
@@ -367,22 +367,33 @@ const TransactionInsightsDialog: React.FC<{
 const FileUploadDialog: React.FC<{
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
-  onDataUploaded: () => void; 
+  onDataUploaded: () => void;
   existingAccounts: Account[];
 }> = ({ isOpen, onOpenChange, onDataUploaded, existingAccounts }) => {
   const { toast } = useToast();
   const [isProcessing, setIsProcessing] = useState(false);
   const [statementType, setStatementType] = useState<StatementType>("debit");
+  const [selectedAccountId, setSelectedAccountId] = useState<string>("");
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isOpen && existingAccounts.length > 0 && !selectedAccountId) {
+      setSelectedAccountId(existingAccounts[0].id);
+    }
+  }, [isOpen, existingAccounts, selectedAccountId]);
 
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (!selectedAccountId) {
+      toast({ title: "Account Required", description: "Please select an account for this CSV upload.", variant: "destructive" });
+      return;
+    }
 
     setIsProcessing(true);
     const reader = new FileReader();
-    const fileName = file.name; 
+    const fileName = file.name;
 
     reader.onload = async (e) => {
       const csvText = e.target?.result as string;
@@ -398,7 +409,7 @@ const FileUploadDialog: React.FC<{
         setIsProcessing(false);
         return;
       }
-      
+
       const headerLine = lines[0];
       const dataLines = lines.slice(1);
 
@@ -407,27 +418,24 @@ const FileUploadDialog: React.FC<{
           csvHeader: headerLine,
           requiredFields: [...REQUIRED_TRANSACTION_FIELDS],
         });
-        
+
         if (!mappingResult.Date || !mappingResult.Amount || !mappingResult.Description) {
             toast({ title: "Header Mapping Failed", description: "AI could not map essential fields (Date, Amount, Description). Please check CSV header.", variant: "destructive" });
             setIsProcessing(false);
             return;
         }
 
-        const { parsedTransactions, newAccountsToCreate } = parseCSVContent(
-          headerLine.split(',').map(h => h.trim()), 
-          dataLines, 
-          mappingResult, 
-          existingAccounts,
+        const parsedTransactions = parseCSVContent(
+          headerLine.split(',').map(h => h.trim()),
+          dataLines,
+          mappingResult,
+          selectedAccountId, // Pass the selected account ID
           statementType
         );
 
-        for (const accData of newAccountsToCreate) {
-          await addAccount(accData);
-        }
-        
+
         if (parsedTransactions.length > 0) {
-          const batchResult = await addTransactionsBatch(parsedTransactions, fileName); 
+          const batchResult = await addTransactionsBatch(parsedTransactions, fileName);
           toast({ title: "File Processed", description: `${batchResult.successCount} of ${parsedTransactions.length} transactions loaded.` });
           if (batchResult.errors.length > 0) {
             console.error("Errors during batch transaction add:", batchResult.errors);
@@ -436,15 +444,16 @@ const FileUploadDialog: React.FC<{
         } else {
             toast({ title: "No Transactions", description: "No transactions were parsed from the file." });
         }
-        onDataUploaded(); 
-        onOpenChange(false); 
+        onDataUploaded();
+        onOpenChange(false);
 
       } catch (error: any) {
         console.error("File processing error:", error);
         toast({ title: "Error Processing File", description: error.message || "Could not process CSV with AI mapping.", variant: "destructive" });
       } finally {
         setIsProcessing(false);
-        if (fileInputRef.current) fileInputRef.current.value = ""; 
+        if (fileInputRef.current) fileInputRef.current.value = "";
+        setSelectedAccountId(existingAccounts.length > 0 ? existingAccounts[0].id : ""); // Reset selection
       }
     };
     reader.onerror = () => {
@@ -459,18 +468,15 @@ const FileUploadDialog: React.FC<{
     actualHeader: string[],
     dataLines: string[],
     mapping: MapCsvHeaderOutput,
-    currentAccounts: Account[],
+    csvAccountId: string, // Use the passed accountId
     selectedStatementType: StatementType
-  ): { parsedTransactions: Omit<Transaction, 'id' | 'loadTimestamp' | 'sourceFileName'>[], newAccountsToCreate: (Omit<Account, 'id' | 'balance'> & { id: string, balance?: number })[] } => {
-    
+  ): Omit<Transaction, 'id' | 'loadTimestamp' | 'sourceFileName'>[] => {
+
     const transactions: Omit<Transaction, 'id' | 'loadTimestamp' | 'sourceFileName'>[] = [];
-    const newAccountsMap = new Map<string, Omit<Account, 'id' | 'balance'> & { id: string, balance?: number }>();
-    const existingAccountMap = new Map(currentAccounts.map(acc => [acc.name.toLowerCase(), acc.id]));
-    let tempAccountIdCounter = Date.now();
 
     const columnIndexMap: Partial<Record<typeof REQUIRED_TRANSACTION_FIELDS[number], number>> = {};
     for (const requiredField of REQUIRED_TRANSACTION_FIELDS) {
-        const csvColumnName = mapping[requiredField];
+        const csvColumnName = mapping[requiredField as keyof MapCsvHeaderOutput];
         if (csvColumnName) {
             const index = actualHeader.indexOf(csvColumnName);
             if (index !== -1) {
@@ -482,8 +488,7 @@ const FileUploadDialog: React.FC<{
     if (columnIndexMap.Date === undefined || columnIndexMap.Amount === undefined || columnIndexMap.Description === undefined) {
         throw new Error("Essential fields (Date, Amount, Description) could not be mapped or found in the CSV header.");
     }
-    
-    // Helper functions for parsing CSV values
+
     const getDateValue = (index?: number, allValues?: string[]): string | undefined => (index !== undefined && allValues) ? allValues[index] : undefined;
     const getStringValue = (index?: number, allValues?: string[]): string => ((index !== undefined && allValues) ? allValues[index] : "") || "";
     const getNumericValue = (index?: number, allValues?: string[]): number => {
@@ -491,9 +496,7 @@ const FileUploadDialog: React.FC<{
           return NaN;
         }
         let s = allValues[index].trim();
-        // Remove common currency symbols ($, €, £) and thousands separators (,)
         s = s.replace(/[$,€£]/g, '').replace(/,/g, '');
-        // Handle numbers in parentheses like (100.00) as negative
         if (s.startsWith('(') && s.endsWith(')')) {
           s = '-' + s.substring(1, s.length - 1);
         }
@@ -504,33 +507,14 @@ const FileUploadDialog: React.FC<{
 
     for (let i = 0; i < dataLines.length; i++) {
       const line = dataLines[i];
-      if (line.trim() === "") continue; 
+      if (line.trim() === "") continue;
 
-      const values = line.split(',').map(v => v.trim().replace(/^"|"$/g, '')); 
+      const values = line.split(',').map(v => v.trim().replace(/^"|"$/g, ''));
       if (values.length !== actualHeader.length) {
         console.warn(`Skipping malformed row ${i + 1}: column count mismatch. Expected ${actualHeader.length}, got ${values.length}. Line: "${line}"`);
         continue;
       }
-      
-      const accountNameCsvColumn = mapping['Account Name'];
-      const accountNameIndex = accountNameCsvColumn ? actualHeader.indexOf(accountNameCsvColumn) : -1;
-      const accountName = accountNameIndex !== -1 ? getStringValue(accountNameIndex, values) : "Default Account";
-      
-      let accountId = existingAccountMap.get(accountName.toLowerCase());
 
-      if (!accountId) {
-          const newTempId = `csv_acc_${tempAccountIdCounter++}`;
-          if (!newAccountsMap.has(accountName.toLowerCase())) {
-            newAccountsMap.set(accountName.toLowerCase(), {
-                id: newTempId, 
-                name: accountName,
-                bankName: "Uploaded File", 
-                type: selectedStatementType === 'credit' ? 'credit card' : 'checking', 
-            });
-          }
-          accountId = newAccountsMap.get(accountName.toLowerCase())!.id;
-      }
-      
       const dateStr = getDateValue(columnIndexMap.Date, values);
       if (!dateStr) {
           console.warn(`Skipping row ${i + 1} due to missing date.`);
@@ -539,7 +523,7 @@ const FileUploadDialog: React.FC<{
       let parsedDate = parse(dateStr, 'yyyy-MM-dd', new Date());
       if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'MM/dd/yyyy', new Date());
       if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'dd-MM-yyyy', new Date());
-      if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'M/d/yy', new Date()); 
+      if (!isValid(parsedDate)) parsedDate = parse(dateStr, 'M/d/yy', new Date());
 
       if (!isValid(parsedDate)) {
           console.warn(`Skipping row ${i+1} due to invalid date format: ${dateStr}`);
@@ -554,21 +538,15 @@ const FileUploadDialog: React.FC<{
 
       let finalAmount: number;
       if (selectedStatementType === 'credit') {
-        finalAmount = -rawCsvAmount; 
-      } else { 
+        finalAmount = -rawCsvAmount;
+      } else {
         finalAmount = rawCsvAmount;
       }
-      
-      const typeCsvColumn = mapping.Type;
-      const typeIndex = typeCsvColumn ? actualHeader.indexOf(typeCsvColumn) : -1;
+
       let category = getStringValue(columnIndexMap.Category, values) || "Uncategorized";
 
-      if (typeIndex !== -1) {
-          const typeValue = getStringValue(typeIndex, values).toLowerCase();
-      }
-      
       transactions.push({
-        accountId: accountId!,
+        accountId: csvAccountId, // Use the selected account ID
         date: parsedDate.toISOString(),
         description: getStringValue(columnIndexMap.Description, values) || "N/A",
         amount: finalAmount,
@@ -576,20 +554,46 @@ const FileUploadDialog: React.FC<{
         status: 'posted',
       });
     }
-    return { parsedTransactions: transactions, newAccountsToCreate: Array.from(newAccountsMap.values()) };
+    return transactions;
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={onOpenChange}>
+    <Dialog open={isOpen} onOpenChange={(open) => {
+        onOpenChange(open);
+        if (!open) {
+            if (fileInputRef.current) fileInputRef.current.value = "";
+            setSelectedAccountId(existingAccounts.length > 0 ? existingAccounts[0].id : "");
+            setStatementType("debit");
+        }
+    }}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle className="flex items-center"><UploadCloud className="mr-2 h-5 w-5" /> Upload Transactions (CSV)</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-4">
           <div>
+            <Label className="text-sm font-medium" htmlFor="csv-account-select">Account for this CSV</Label>
+            <Select 
+              value={selectedAccountId} 
+              onValueChange={setSelectedAccountId}
+              disabled={existingAccounts.length === 0}
+            >
+              <SelectTrigger id="csv-account-select">
+                <SelectValue placeholder="Select an account" />
+              </SelectTrigger>
+              <SelectContent>
+                {existingAccounts.map(acc => (
+                  <SelectItem key={acc.id} value={acc.id}>{acc.name} ({acc.bankName})</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {existingAccounts.length === 0 && <p className="text-xs text-muted-foreground mt-1">No accounts found. Please add an account on the Accounts page first.</p>}
+          </div>
+
+          <div>
             <Label className="text-sm font-medium">Statement Type</Label>
             <RadioGroup
-              defaultValue="debit"
+              value={statementType}
               onValueChange={(value: string) => setStatementType(value as StatementType)}
               className="flex gap-4 mt-1"
             >
@@ -603,11 +607,11 @@ const FileUploadDialog: React.FC<{
               </div>
             </RadioGroup>
           </div>
-          <Input type="file" accept=".csv" onChange={handleFileChange} disabled={isProcessing} ref={fileInputRef} />
+          <Input type="file" accept=".csv" onChange={handleFileChange} disabled={isProcessing || existingAccounts.length === 0} ref={fileInputRef} />
           {isProcessing && <p className="text-sm text-muted-foreground mt-2">Processing file with AI...</p>}
           <p className="text-xs text-muted-foreground mt-2">
             The system will attempt to automatically map your CSV columns.
-            Required concepts: Date, Description, Amount. Optional: Type (income/expense), Category, Account Name.
+            Required concepts: Date, Description, Amount. Optional: Type (income/expense), Category.
           </p>
         </div>
          <DialogFooter>
@@ -619,10 +623,10 @@ const FileUploadDialog: React.FC<{
 };
 
 
-const DataManagementDialog: React.FC<{ 
+const DataManagementDialog: React.FC<{
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
-  onDataUpdated: () => void 
+  onDataUpdated: () => void
 }> = ({ isOpen, onOpenChange, onDataUpdated }) => {
   const { toast } = useToast();
   const [isRemovingDuplicates, setIsRemovingDuplicates] = useState(false);
@@ -630,7 +634,7 @@ const DataManagementDialog: React.FC<{
 
   const handleRemoveDuplicates = async () => {
     setIsRemovingDuplicates(true);
-    setIsConfirmRemoveOpen(false); 
+    setIsConfirmRemoveOpen(false);
     try {
       const result = await removeDuplicateTransactions();
       if (result.success) {
@@ -638,8 +642,8 @@ const DataManagementDialog: React.FC<{
           title: "Duplicates Removed",
           description: `${result.duplicatesRemoved} duplicate transaction(s) were removed.`,
         });
-        onDataUpdated(); 
-        onOpenChange(false); 
+        onDataUpdated();
+        onOpenChange(false);
       } else {
         toast({
           title: "Error Removing Duplicates",
@@ -703,60 +707,144 @@ const DataManagementDialog: React.FC<{
   );
 };
 
-const BulkCategoryUpdateDialog: React.FC<{
+
+const bulkTransactionUpdateFormSchema = z.object({
+  date: z.string().optional().refine(val => !val || isValid(parseISO(val)), { message: "Invalid date format" }),
+  description: z.string().optional(),
+  amount: z.string().optional().refine(val => !val || !isNaN(parseFloat(val)), { message: "Amount must be a valid number"}),
+  category: z.string().optional(),
+});
+
+type BulkTransactionUpdateFormData = z.infer<typeof bulkTransactionUpdateFormSchema>;
+
+const BulkTransactionUpdateDialog: React.FC<{
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
   selectedTransactionIds: string[];
   onUpdateComplete: () => void;
 }> = ({ isOpen, onOpenChange, selectedTransactionIds, onUpdateComplete }) => {
   const { toast } = useToast();
-  const [newCategory, setNewCategory] = useState("");
   const [isUpdating, setIsUpdating] = useState(false);
 
-  const handleUpdateCategory = async () => {
-    if (!newCategory || selectedTransactionIds.length === 0) {
-      toast({ title: "Cannot Update", description: "Please select a category and ensure transactions are selected.", variant: "destructive"});
+  const form = useForm<BulkTransactionUpdateFormData>({
+    resolver: zodResolver(bulkTransactionUpdateFormSchema),
+    defaultValues: {
+      date: "",
+      description: "",
+      amount: "",
+      category: "",
+    }
+  });
+
+ useEffect(() => {
+    if (isOpen) {
+      form.reset({ // Reset form when dialog opens
+        date: "",
+        description: "",
+        amount: "",
+        category: "",
+      });
+    }
+  }, [isOpen, form]);
+
+
+  const handleUpdate = async (data: BulkTransactionUpdateFormData) => {
+    if (selectedTransactionIds.length === 0) {
+      toast({ title: "No Transactions Selected", description: "Please select transactions to update.", variant: "destructive"});
       return;
     }
+    
+    const updates: { category?: string; date?: string; description?: string; amount?: number; } = {};
+    if (data.category) updates.category = data.category;
+    if (data.date) updates.date = parseISO(data.date).toISOString();
+    if (data.description) updates.description = data.description;
+    if (data.amount) updates.amount = parseFloat(data.amount);
+
+    if (Object.keys(updates).length === 0) {
+      toast({ title: "No Changes", description: "Please provide at least one field to update.", variant: "default"});
+      return;
+    }
+
     setIsUpdating(true);
-    const result = await updateTransactionCategoryBatchAction(selectedTransactionIds, newCategory);
+    const result = await updateMultipleTransactionFields(selectedTransactionIds, updates);
     if (result.success) {
-      toast({ title: "Bulk Update Successful", description: `${result.count} transactions updated to category: ${newCategory}.`});
+      toast({ title: "Bulk Update Successful", description: `${result.count} transactions updated.`});
       onUpdateComplete();
       onOpenChange(false);
-      setNewCategory(""); 
     } else {
-      toast({ title: "Bulk Update Failed", description: result.error || "Could not update categories.", variant: "destructive"});
+      toast({ title: "Bulk Update Failed", description: result.error || "Could not update transactions.", variant: "destructive"});
     }
     setIsUpdating(false);
   };
-  
+
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => { onOpenChange(open); if (!open) setNewCategory("");}}>
-      <DialogContent>
+    <Dialog open={isOpen} onOpenChange={(open) => { onOpenChange(open); if (!open) form.reset();}}>
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Bulk Update Category</DialogTitle>
+          <DialogTitle>Bulk Update Transactions</DialogTitle>
           <DialogDescription>
-            Update the category for {selectedTransactionIds.length} selected transaction(s).
+            Update fields for {selectedTransactionIds.length} selected transaction(s). Only filled fields will be updated.
           </DialogDescription>
         </DialogHeader>
-        <div className="py-4 space-y-2"> 
-          <Label htmlFor="bulk-update-category-select">New Category</Label>
-          <Select onValueChange={setNewCategory} value={newCategory}>
-            <SelectTrigger id="bulk-update-category-select">
-              <SelectValue placeholder="Select new category" />
-            </SelectTrigger>
-            <SelectContent>
-              {allCategories.map(cat => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </div>
-        <DialogFooter>
-          <DialogClose asChild><Button variant="outline" disabled={isUpdating}>Cancel</Button></DialogClose>
-          <Button onClick={handleUpdateCategory} disabled={isUpdating || !newCategory}>
-            {isUpdating ? "Updating..." : "Update Category"}
-          </Button>
-        </DialogFooter>
+        <Form {...form}>
+        <form onSubmit={form.handleSubmit(handleUpdate)} className="space-y-4 py-4">
+          <FormField
+            control={form.control}
+            name="date"
+            render={({ field }) => (
+              <FormItem>
+                <RHFFormLabel>New Date (Optional)</RHFFormLabel>
+                <FormControl><Input type="date" {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="description"
+            render={({ field }) => (
+              <FormItem>
+                <RHFFormLabel>New Description (Optional)</RHFFormLabel>
+                <FormControl><Input placeholder="Enter new description" {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="amount"
+            render={({ field }) => (
+              <FormItem>
+                <RHFFormLabel>New Amount (Optional)</RHFFormLabel>
+                <FormControl><Input type="number" step="0.01" placeholder="Enter new amount (e.g., -25.50 or 100)" {...field} /></FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="category"
+            render={({ field }) => (
+              <FormItem>
+                <RHFFormLabel>New Category (Optional)</RHFFormLabel>
+                <Select onValueChange={field.onChange} value={field.value || ""}>
+                  <FormControl><SelectTrigger><SelectValue placeholder="Select new category" /></SelectTrigger></FormControl>
+                  <SelectContent>
+                    {allCategories.map(cat => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <DialogFooter>
+            <DialogClose asChild><Button variant="outline" type="button" disabled={isUpdating}>Cancel</Button></DialogClose>
+            <Button type="submit" disabled={isUpdating}>
+              {isUpdating ? "Updating..." : "Update Transactions"}
+            </Button>
+          </DialogFooter>
+        </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
@@ -775,7 +863,7 @@ export default function TransactionsPage() {
   const [isUploadOpen, setIsUploadOpen] = useState(false);
   const [isDataManagementOpen, setIsDataManagementOpen] = useState(false);
   const [isInsightsOpen, setIsInsightsOpen] = useState(false);
-  const [isBulkCategoryUpdateOpen, setIsBulkCategoryUpdateOpen] = useState(false);
+  const [isBulkUpdateOpen, setIsBulkUpdateOpen] = useState(false);
   const [transactionToDeleteId, setTransactionToDeleteId] = useState<string | null>(null);
 
 
@@ -787,7 +875,7 @@ export default function TransactionsPage() {
     ]);
     setAccounts(dbAccounts);
     setTransactions(dbTransactions);
-    setRowSelection({}); 
+    setRowSelection({});
     setIsLoading(false);
   }, []);
 
@@ -809,13 +897,13 @@ export default function TransactionsPage() {
     const result = await deleteTransactionAction(transactionToDeleteId);
     if (result.success) {
       toast({ title: "Transaction Deleted", description: "The transaction has been removed." });
-      fetchData(); 
+      fetchData();
     } else {
       toast({ title: "Error Deleting", description: result.error || "Could not delete transaction.", variant: "destructive" });
     }
-    setTransactionToDeleteId(null); 
+    setTransactionToDeleteId(null);
   };
-  
+
  const handleBulkDelete = async () => {
     if (selectedTransactionIds.length === 0) {
       toast({
@@ -823,18 +911,18 @@ export default function TransactionsPage() {
         description: "Please select transactions to delete.",
         variant: "destructive"
       });
-      setTransactionToDeleteId(null); 
+      setTransactionToDeleteId(null);
       return;
     }
-  
+
     const result = await deleteTransactionsBatchAction(selectedTransactionIds);
     if (result.success) {
       toast({ title: "Bulk Delete Successful", description: `${result.count} transactions deleted.` });
-      fetchData(); 
+      fetchData();
     } else {
       toast({ title: "Bulk Delete Failed", description: result.error || "Could not delete selected transactions.", variant: "destructive" });
     }
-    setTransactionToDeleteId(null); 
+    setTransactionToDeleteId(null);
   };
 
 
@@ -952,6 +1040,7 @@ export default function TransactionsPage() {
               <DropdownMenuItem onClick={() => handleOpenInsights(transaction)}>
                 <Sparkles className="mr-2 h-4 w-4" /> AI Insights
               </DropdownMenuItem>
+              {/* We can add an "Edit" item here later if single transaction edit is needed */}
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={() => setTransactionToDeleteId(transaction.id)}
@@ -964,7 +1053,7 @@ export default function TransactionsPage() {
         );
       },
     },
-  ], [accounts, rowSelection, toast, fetchData]); 
+  ], [accounts, rowSelection, toast, fetchData]);
 
 
   if (isLoading) {
@@ -976,8 +1065,8 @@ export default function TransactionsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-center gap-2">
-        <div className="flex gap-2">
+      <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
+        <div className="flex flex-wrap gap-2">
             <Button onClick={() => setIsAddTransactionOpen(true)}>
             <PlusCircle className="mr-2 h-4 w-4" /> Add New
             </Button>
@@ -989,18 +1078,21 @@ export default function TransactionsPage() {
             </Button>
         </div>
         {numSelected > 0 && (
-          <div className="flex gap-2 mt-2 sm:mt-0">
-            <Button variant="outline" onClick={() => setIsBulkCategoryUpdateOpen(true)}>
-              <Edit3 className="mr-2 h-4 w-4" /> Update Category ({numSelected})
-            </Button>
-            <Button variant="destructive" onClick={() => setTransactionToDeleteId('bulk')}> 
-              <Trash2 className="mr-2 h-4 w-4" /> Delete Selected ({numSelected})
-            </Button>
-          </div>
+          <Card className="p-2 border-dashed w-full sm:w-auto mt-2 sm:mt-0">
+            <div className="flex flex-wrap gap-2 items-center">
+              <span className="text-sm text-muted-foreground">{numSelected} selected</span>
+              <Button variant="outline" size="sm" onClick={() => setIsBulkUpdateOpen(true)}>
+                <Edit className="mr-2 h-4 w-4" /> Update Data
+              </Button>
+              <Button variant="destructive" size="sm" onClick={() => setTransactionToDeleteId('bulk')}>
+                <Trash2 className="mr-2 h-4 w-4" /> Delete Selected
+              </Button>
+            </div>
+          </Card>
         )}
       </div>
 
-      <AddTransactionFormDialog 
+      <AddTransactionFormDialog
         isOpen={isAddTransactionOpen}
         onOpenChange={setIsAddTransactionOpen}
         onTransactionAdded={fetchData}
@@ -1022,19 +1114,19 @@ export default function TransactionsPage() {
         onOpenChange={setIsInsightsOpen}
         transaction={selectedTransactionForInsights}
       />
-      <BulkCategoryUpdateDialog
-        isOpen={isBulkCategoryUpdateOpen}
-        onOpenChange={setIsBulkCategoryUpdateOpen}
+      <BulkTransactionUpdateDialog
+        isOpen={isBulkUpdateOpen}
+        onOpenChange={setIsBulkUpdateOpen}
         selectedTransactionIds={selectedTransactionIds}
         onUpdateComplete={fetchData}
       />
-      
+
       <AlertDialog open={!!transactionToDeleteId} onOpenChange={(open) => !open && setTransactionToDeleteId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Are you sure?</AlertDialogTitle>
             <AlertDialogDescription>
-              {transactionToDeleteId === 'bulk' 
+              {transactionToDeleteId === 'bulk'
                 ? `This will permanently delete ${numSelected} selected transaction(s).`
                 : "This action will permanently delete the transaction."}
               This cannot be undone.
@@ -1042,8 +1134,8 @@ export default function TransactionsPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={() => setTransactionToDeleteId(null)}>Cancel</AlertDialogCancel>
-            <AlertDialogAction 
-              onClick={transactionToDeleteId === 'bulk' ? handleBulkDelete : handleDeleteSingleTransaction} 
+            <AlertDialogAction
+              onClick={transactionToDeleteId === 'bulk' ? handleBulkDelete : handleDeleteSingleTransaction}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               Yes, Delete
@@ -1076,6 +1168,3 @@ export default function TransactionsPage() {
     </div>
   );
 }
-
-
-      
