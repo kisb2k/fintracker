@@ -70,19 +70,23 @@ export async function getTransactions(): Promise<Transaction[]> {
   }
 }
 
-export async function addTransaction(transactionData: Omit<Transaction, 'id'>): Promise<Transaction | null> {
+export async function addTransaction(transactionData: Omit<Transaction, 'id' | 'loadTimestamp' | 'sourceFileName'>): Promise<Transaction | null> {
   const db = await getDb();
   const id = crypto.randomUUID();
+  const loadTimestamp = new Date().toISOString();
+  const sourceFileName = "Manual Entry";
   try {
     await db.run(
-      'INSERT INTO transactions (id, accountId, date, description, amount, category, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO transactions (id, accountId, date, description, amount, category, status, loadTimestamp, sourceFileName) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
       id,
       transactionData.accountId,
       transactionData.date, // Should be ISO string
       transactionData.description,
       transactionData.amount,
       transactionData.category,
-      transactionData.status || 'posted'
+      transactionData.status || 'posted',
+      loadTimestamp,
+      sourceFileName
     );
     const newTransaction = await db.get<Transaction>('SELECT * FROM transactions WHERE id = ?', id);
     if (newTransaction) {
@@ -95,16 +99,20 @@ export async function addTransaction(transactionData: Omit<Transaction, 'id'>): 
   }
 }
 
-export async function addTransactionsBatch(transactionsData: Omit<Transaction, 'id'>[]): Promise<{ successCount: number; errors: any[] }> {
+export async function addTransactionsBatch(
+  transactionsData: Omit<Transaction, 'id' | 'loadTimestamp' | 'sourceFileName'>[], 
+  sourceFileName: string
+): Promise<{ successCount: number; errors: any[] }> {
   const db = await getDb();
   let successCount = 0;
   const errors: any[] = [];
   const affectedAccountIds = new Set<string>();
+  const loadTimestamp = new Date().toISOString();
 
   try {
     await db.exec('BEGIN TRANSACTION');
     const stmt = await db.prepare(
-      'INSERT INTO transactions (id, accountId, date, description, amount, category, status) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO transactions (id, accountId, date, description, amount, category, status, loadTimestamp, sourceFileName) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
     );
 
     for (const txData of transactionsData) {
@@ -117,7 +125,9 @@ export async function addTransactionsBatch(transactionsData: Omit<Transaction, '
           txData.description,
           txData.amount,
           txData.category,
-          txData.status || 'posted'
+          txData.status || 'posted',
+          loadTimestamp,
+          sourceFileName
         );
         affectedAccountIds.add(txData.accountId);
         successCount++;

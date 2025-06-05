@@ -29,7 +29,8 @@ async function initializeDatabaseSchema(dbInstance: Database): Promise<void> {
       amount REAL NOT NULL, -- positive for income, negative for expense
       category TEXT,
       status TEXT CHECK(status IN ('pending', 'posted')) DEFAULT 'posted',
-      FOREIGN KEY (accountId) REFERENCES accounts(id) ON DELETE CASCADE
+      loadTimestamp TEXT, -- ISO 8601 string for when the transaction was loaded
+      sourceFileName TEXT   -- Name of the file it came from, or 'Manual Entry'
     );
   `);
   console.log('Database schema initialized or already exists.');

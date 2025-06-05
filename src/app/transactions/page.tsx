@@ -40,16 +40,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import {
   Form,
-  FormControl, // Keep for AddTransactionFormDialog
-  FormField, // Keep for AddTransactionFormDialog
-  FormItem, // Keep for AddTransactionFormDialog
-  FormLabel as RHFFormLabel, // Keep for AddTransactionFormDialog, aliased to avoid conflict
-  FormMessage, // Keep for AddTransactionFormDialog
-  FormDescription, // Keep for AddTransactionFormDialog
+  FormControl,
+  FormField, 
+  FormItem, 
+  FormLabel as RHFFormLabel,
+  FormMessage, 
+  FormDescription, 
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Label } from "@/components/ui/label"; // Use basic Label for BulkCategoryUpdateDialog
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -115,16 +115,21 @@ const AddTransactionFormDialog: React.FC<{
   });
 
   useEffect(() => {
-    if (accounts.length > 0 && !form.getValues("accountId")) {
-      form.setValue("accountId", accounts[0].id);
-    } else if (accounts.length === 0 && form.getValues("accountId") !== "") {
-      form.setValue("accountId", "");
+    if (isOpen) { // Reset form when dialog opens and ensure accountId is set if accounts exist
+        form.reset({
+            description: "",
+            amount: 0,
+            date: format(new Date(), 'yyyy-MM-dd'),
+            category: "",
+            accountId: accounts.length > 0 ? accounts[0].id : "",
+            type: "expense",
+        });
     }
-  }, [accounts, form]);
+  }, [isOpen, accounts, form]);
 
 
   const onSubmit = async (data: TransactionFormData) => {
-    const newTransactionData: Omit<Transaction, 'id'> = {
+    const newTransactionData: Omit<Transaction, 'id' | 'loadTimestamp' | 'sourceFileName'> = {
       accountId: data.accountId,
       date: new Date(data.date).toISOString(), 
       description: data.description,
@@ -137,14 +142,6 @@ const AddTransactionFormDialog: React.FC<{
     if (result) {
       toast({ title: "Transaction Added", description: `${data.description} successfully added.` });
       onTransactionAdded(); 
-      form.reset({
-          description: "",
-          amount: 0,
-          date: format(new Date(), 'yyyy-MM-dd'),
-          category: "",
-          accountId: accounts[0]?.id || "",
-          type: "expense",
-      });
       onOpenChange(false); 
     } else {
       toast({ title: "Error", description: "Failed to add transaction.", variant: "destructive" });
@@ -385,6 +382,7 @@ const FileUploadDialog: React.FC<{
 
     setIsProcessing(true);
     const reader = new FileReader();
+    const fileName = file.name; // Capture file name
 
     reader.onload = async (e) => {
       const csvText = e.target?.result as string;
@@ -429,7 +427,7 @@ const FileUploadDialog: React.FC<{
         }
         
         if (parsedTransactions.length > 0) {
-          const batchResult = await addTransactionsBatch(parsedTransactions);
+          const batchResult = await addTransactionsBatch(parsedTransactions, fileName); // Pass fileName here
           toast({ title: "File Processed", description: `${batchResult.successCount} of ${parsedTransactions.length} transactions loaded.` });
           if (batchResult.errors.length > 0) {
             console.error("Errors during batch transaction add:", batchResult.errors);
@@ -463,9 +461,9 @@ const FileUploadDialog: React.FC<{
     mapping: MapCsvHeaderOutput,
     currentAccounts: Account[],
     selectedStatementType: StatementType
-  ): { parsedTransactions: Omit<Transaction, 'id'>[], newAccountsToCreate: (Omit<Account, 'id' | 'balance'> & { id: string, balance?: number })[] } => {
+  ): { parsedTransactions: Omit<Transaction, 'id' | 'loadTimestamp' | 'sourceFileName'>[], newAccountsToCreate: (Omit<Account, 'id' | 'balance'> & { id: string, balance?: number })[] } => {
     
-    const transactions: Omit<Transaction, 'id'>[] = [];
+    const transactions: Omit<Transaction, 'id' | 'loadTimestamp' | 'sourceFileName'>[] = [];
     const newAccountsMap = new Map<string, Omit<Account, 'id' | 'balance'> & { id: string, balance?: number }>();
     const existingAccountMap = new Map(currentAccounts.map(acc => [acc.name.toLowerCase(), acc.id]));
     let tempAccountIdCounter = Date.now();
@@ -711,7 +709,7 @@ const BulkCategoryUpdateDialog: React.FC<{
       toast({ title: "Bulk Update Successful", description: `${result.count} transactions updated to category: ${newCategory}.`});
       onUpdateComplete();
       onOpenChange(false);
-      setNewCategory(""); // Reset for next use
+      setNewCategory(""); 
     } else {
       toast({ title: "Bulk Update Failed", description: result.error || "Could not update categories.", variant: "destructive"});
     }
@@ -727,7 +725,7 @@ const BulkCategoryUpdateDialog: React.FC<{
             Update the category for {selectedTransactionIds.length} selected transaction(s).
           </DialogDescription>
         </DialogHeader>
-        <div className="py-4 space-y-2"> {/* Changed from space-y-4 to space-y-2 for tighter packing */}
+        <div className="py-4 space-y-2"> 
           <Label htmlFor="bulk-update-category-select">New Category</Label>
           <Select onValueChange={setNewCategory} value={newCategory}>
             <SelectTrigger id="bulk-update-category-select">
@@ -792,7 +790,7 @@ export default function TransactionsPage() {
   };
 
   const handleDeleteSingleTransaction = async () => {
-    if (!transactionToDeleteId) return;
+    if (!transactionToDeleteId || transactionToDeleteId === 'bulk') return;
     const result = await deleteTransactionAction(transactionToDeleteId);
     if (result.success) {
       toast({ title: "Transaction Deleted", description: "The transaction has been removed." });
@@ -804,7 +802,7 @@ export default function TransactionsPage() {
   };
   
   const handleBulkDelete = async () => {
-    if (selectedTransactionIds.length === 0) {
+     if (selectedTransactionIds.length === 0) {
       toast({
         title: "No Transactions Selected",
         description: "Please select transactions to delete.",
@@ -887,6 +885,35 @@ export default function TransactionsPage() {
       },
     },
     {
+      accessorKey: "loadTimestamp",
+      header: ({ column }) => (
+        <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
+          Load Time <ArrowUpDown className="ml-2 h-4 w-4" />
+        </Button>
+      ),
+      cell: ({ row }) => {
+        const timestamp = row.getValue("loadTimestamp") as string | undefined;
+        try {
+          return timestamp ? format(parseISO(timestamp), "MMM dd, yyyy HH:mm") : "N/A";
+        } catch (e) {
+          console.error("Error formatting loadTimestamp:", e, "Value:", timestamp);
+          return "Invalid Date";
+        }
+      }
+    },
+    {
+      accessorKey: "sourceFileName",
+      header: ({ column }) => (
+        <Button variant="ghost" onClick={() => column.toggleSorting(column.getIsSorted() === "asc")}>
+          Source File <ArrowUpDown className="ml-2 h-4 w-4" />
+        </Button>
+      ),
+      cell: ({ row }) => {
+        const fileName = row.getValue("sourceFileName") as string | undefined | null;
+        return <span className="truncate block max-w-xs">{fileName || "N/A"}</span>;
+      }
+    },
+    {
       accessorKey: "accountId",
       header: "Account",
       cell: ({row}) => {
@@ -922,7 +949,7 @@ export default function TransactionsPage() {
         );
       },
     },
-  ], [accounts, rowSelection]);
+  ], [accounts, rowSelection]); // Added rowSelection as a dependency for columns memoization
 
 
   if (isLoading) {

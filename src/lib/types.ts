@@ -16,6 +16,8 @@ export type Transaction = {
   amount: number; // positive for income, negative for expense
   category: string;
   status?: 'pending' | 'posted';
+  loadTimestamp?: string; // ISO string for when the transaction was loaded
+  sourceFileName?: string | null; // Name of the file it came from, or e.g. "Manual Entry"
 };
 
 export type Budget = {
@@ -46,5 +48,3 @@ export type UnusualSpendingInfo = {
   explanation: string;
   suggestions: string;
 };
-
-// Removed PlaidLinkOnSuccessMetadata as Plaid integration is being replaced.
