@@ -28,9 +28,9 @@ import {
 import { mockBudgets, transactionCategories as defaultCategories } from '@/lib/mock-data';
 import type { Budget, Transaction, BudgetRecurrenceFrequency } from '@/lib/types';
 import { 
-  format, parseISO, isValid,
+  format, parseISO, isValid, formatISO, // Added formatISO
   startOfDay, endOfDay, isWithinInterval,
-  addWeeks, addMonths, addYears,
+  addWeeks, addMonths, addYears, addDays, subMonths, // Added addDays, subMonths
   startOfWeek, endOfWeek,
   startOfMonth, endOfMonth,
   startOfQuarter, endOfQuarter,
@@ -39,7 +39,8 @@ import {
   differenceInCalendarWeeks,
   differenceInCalendarYears,
   differenceInCalendarQuarters,
-  isBefore, isAfter
+  isBefore, isAfter,
+  getWeek
 } from 'date-fns';
 import { PlusCircle, Edit, Trash2, Target, GripVertical, ListFilter, CalendarDays } from 'lucide-react';
 import { useForm, Controller } from "react-hook-form";
@@ -293,7 +294,7 @@ export default function BudgetsPage() {
     return transactions
       .filter(t => 
         t.category === category &&
-        t.amount < 0 && 
+        t.amount < 0 && // Only count expenses towards budget spending
         isWithinInterval(parseISO(t.date), { 
           start: startOfDay(parseISO(periodStartDate)), 
           end: endOfDay(parseISO(periodEndDate)) 
@@ -306,128 +307,176 @@ export default function BudgetsPage() {
     if (!budget) return [];
     
     if (!budget.isRecurring || !budget.originalStartDate || !budget.recurrenceFrequency) {
+        // For non-recurring, or invalid recurring setup, return its defined period
         return [{ name: "Budget Period", startDate: budget.startDate, endDate: budget.endDate }];
     }
 
     const periods: Array<{ name: string; startDate: string; endDate: string }> = [];
     const today = new Date();
-    let currentPeriodStart = parseISO(budget.originalStartDate);
-
-    const addPeriod = (start: Date, end: Date, periodNameFormat: string) => {
-        periods.push({
-            name: format(start, periodNameFormat),
-            startDate: formatISO(startOfDay(start)),
-            endDate: formatISO(endOfDay(end))
-        });
-    };
     
     let iterationLimit = numPast + 1 + numFuture + 50; // Safety break
 
-    // Generate past periods up to numPast or until originalStartDate
-    let tempStart = parseISO(budget.originalStartDate);
-    const pastPeriodsTemp: Array<{ name: string; startDate: string; endDate: string }> = [];
-
-    while (isBefore(tempStart, today) && pastPeriodsTemp.length < numPast + 50 && iterationLimit-- > 0) { // Generate a bit more past to pick from
-        let periodEnd: Date;
-        let periodNameFmt = "MMM yyyy";
-        switch (budget.recurrenceFrequency) {
+    // Function to advance date based on frequency
+    const advanceDate = (date: Date, freq: BudgetRecurrenceFrequency): Date => {
+        switch (freq) {
+            case 'weekly': return startOfWeek(addWeeks(date, 1), { weekStartsOn: 1 }); // Ensure it aligns to start of week
+            case 'biweekly': return startOfDay(addWeeks(date, 2)); // Bi-weekly usually aligns to exact start day
+            case 'monthly': return startOfMonth(addMonths(date, 1));
+            case 'quarterly': return startOfQuarter(addMonths(date, 3));
+            case 'annually': return startOfYear(addYears(date, 1));
+            default: return date; 
+        }
+    };
+    
+    // Function to get period end and name format
+    const getPeriodDetails = (start: Date, freq: BudgetRecurrenceFrequency): { end: Date; nameFmt: string } => {
+        let end: Date;
+        let nameFmt = "MMM yyyy";
+        switch (freq) {
             case 'weekly':
-                periodEnd = endOfWeek(tempStart, { weekStartsOn: 1 }); // Assuming week starts on Monday
-                periodNameFmt = "'Week of' MMM dd, yyyy";
+                end = endOfWeek(start, { weekStartsOn: 1 });
+                nameFmt = "'Week of' MMM dd, yyyy (W" + format(start, 'ww') +")";
                 break;
             case 'biweekly':
-                periodEnd = addWeeks(tempStart, 2);
-                periodEnd = subMonths(addWeeks(tempStart,2),0); periodEnd.setDate(periodEnd.getDate()-1); // end of 2 weeks
-                periodNameFmt = "'Bi-Week of' MMM dd, yyyy";
+                end = addDays(addWeeks(start, 2), -1); // Two weeks from start, minus one day
+                nameFmt = "'Bi-Week' MMM dd, yyyy";
                 break;
             case 'monthly':
-                periodEnd = endOfMonth(tempStart);
-                periodNameFmt = "MMMM yyyy";
+                end = endOfMonth(start);
+                nameFmt = "MMMM yyyy";
                 break;
             case 'quarterly':
-                periodEnd = endOfQuarter(tempStart);
-                periodNameFmt = "QQQ yyyy";
+                end = endOfQuarter(start);
+                nameFmt = "QQQ yyyy";
                 break;
             case 'annually':
-                periodEnd = endOfYear(tempStart);
-                periodNameFmt = "yyyy";
+                end = endOfYear(start);
+                nameFmt = "yyyy";
                 break;
-            default: return [];
+            default: 
+                end = endOfMonth(start); // Fallback, should not happen
         }
-        if(isAfter(periodEnd, parseISO(budget.originalStartDate!))) { // ensure period end is not before original start
-             pastPeriodsTemp.push({
-                name: format(tempStart, periodNameFmt),
-                startDate: formatISO(startOfDay(tempStart)),
-                endDate: formatISO(endOfDay(periodEnd))
-            });
-        }
+        return { end, nameFmt };
+    };
 
-        switch (budget.recurrenceFrequency) {
-            case 'weekly': tempStart = addWeeks(tempStart, 1); break;
-            case 'biweekly': tempStart = addWeeks(tempStart, 2); break;
-            case 'monthly': tempStart = addMonths(tempStart, 1); tempStart = startOfMonth(tempStart); break;
-            case 'quarterly': tempStart = addMonths(tempStart, 3); tempStart = startOfQuarter(tempStart); break;
-            case 'annually': tempStart = addYears(tempStart, 1); tempStart = startOfYear(tempStart); break;
+    // Generate past periods up to original start date or numPast
+    let currentPeriodStartForPast = parseISO(budget.originalStartDate);
+    const pastPeriodsTemp: Array<{ name: string; startDate: string; endDate: string }> = [];
+    
+    // First, find the period that contains today (or the latest past period if today is before originalStartDate)
+    let seedPeriodStart = parseISO(budget.originalStartDate);
+    while (isBefore(seedPeriodStart, today) && iterationLimit-- > 0) {
+        const { end: seedPeriodEnd } = getPeriodDetails(seedPeriodStart, budget.recurrenceFrequency);
+        if (isWithinInterval(today, { start: seedPeriodStart, end: endOfDay(seedPeriodEnd) })) {
+            break; 
         }
+        if (isAfter(seedPeriodStart, today) && isBefore(parseISO(budget.originalStartDate), seedPeriodStart)) { // if today is before any generated period
+             seedPeriodStart = advanceDate(subMonths(seedPeriodStart,1), budget.recurrenceFrequency); // Go back one period if current is too far ahead
+             break;
+        }
+        const nextSeedStart = advanceDate(seedPeriodStart, budget.recurrenceFrequency);
+        if (isBefore(nextSeedStart, seedPeriodStart) || nextSeedStart.getTime() === seedPeriodStart.getTime()) { // Break if no progress
+            iterationLimit = 0; break;
+        }
+        seedPeriodStart = nextSeedStart;
+
+        if (isAfter(seedPeriodStart, addYears(today, 5))) { iterationLimit = 0; break; } // safety for runaway loop forward
     }
     
-    // Filter past periods: Get up to `numPast` periods ending before or during current period
-    const currentPeriodIndex = pastPeriodsTemp.findIndex(p => isWithinInterval(today, {start: parseISO(p.startDate), end: parseISO(p.endDate)}));
-    const startIndex = Math.max(0, currentPeriodIndex - numPast +1);
-    periods.push(...pastPeriodsTemp.slice(startIndex, currentPeriodIndex + 1));
-
-
-    // Generate future periods
-    currentPeriodStart = tempStart; // Start from where past generation left off (should be start of current or first future period)
-
-    for (let i = 0; i < numFuture && iterationLimit-- > 0; i++) {
-        let periodEnd: Date;
-        let periodNameFmt = "MMM yyyy";
-         switch (budget.recurrenceFrequency) {
-            case 'weekly':
-                periodEnd = endOfWeek(currentPeriodStart, { weekStartsOn: 1 });
-                periodNameFmt = "'Week of' MMM dd, yyyy";
-                break;
-            case 'biweekly':
-                periodEnd = addWeeks(currentPeriodStart, 2);
-                periodEnd = subMonths(addWeeks(currentPeriodStart,2),0); periodEnd.setDate(periodEnd.getDate()-1);
-                periodNameFmt = "'Bi-Week of' MMM dd, yyyy";
-                break;
-            case 'monthly':
-                periodEnd = endOfMonth(currentPeriodStart);
-                periodNameFmt = "MMMM yyyy";
-                break;
-            case 'quarterly':
-                periodEnd = endOfQuarter(currentPeriodStart);
-                periodNameFmt = "QQQ yyyy";
-                break;
-            case 'annually':
-                periodEnd = endOfYear(currentPeriodStart);
-                periodNameFmt = "yyyy";
-                break;
-            default: return [];
+    // Now go backwards from seedPeriodStart to generate `numPast` periods
+    currentPeriodStartForPast = seedPeriodStart;
+    for (let i = 0; i < numPast && iterationLimit-- > 0; i++) {
+        const { end: periodEnd, nameFmt: periodNameFmt } = getPeriodDetails(currentPeriodStartForPast, budget.recurrenceFrequency);
+        if (isAfter(currentPeriodStartForPast, parseISO(budget.originalStartDate)) || currentPeriodStartForPast.getTime() === parseISO(budget.originalStartDate).getTime()){
+            pastPeriodsTemp.push({
+                name: format(currentPeriodStartForPast, periodNameFmt),
+                startDate: formatISO(startOfDay(currentPeriodStartForPast)),
+                endDate: formatISO(endOfDay(periodEnd))
+            });
+        } else {
+            break; // Stop if we go before original start date
         }
         
+        let prevPeriodStartCandidate: Date;
+        switch (budget.recurrenceFrequency) {
+            case 'weekly': prevPeriodStartCandidate = startOfWeek(addWeeks(currentPeriodStartForPast, -1), {weekStartsOn: 1}); break;
+            case 'biweekly': prevPeriodStartCandidate = startOfDay(addWeeks(currentPeriodStartForPast, -2)); break;
+            case 'monthly': prevPeriodStartCandidate = startOfMonth(addMonths(currentPeriodStartForPast, -1)); break;
+            case 'quarterly': prevPeriodStartCandidate = startOfQuarter(addMonths(currentPeriodStartForPast, -3)); break;
+            case 'annually': prevPeriodStartCandidate = startOfYear(addYears(currentPeriodStartForPast, -1)); break;
+            default: prevPeriodStartCandidate = currentPeriodStartForPast; // Should not happen
+        }
+
+        if (isBefore(prevPeriodStartCandidate, parseISO(budget.originalStartDate)) && prevPeriodStartCandidate.getTime() !== parseISO(budget.originalStartDate).getTime() ) {
+             if (currentPeriodStartForPast.getTime() === parseISO(budget.originalStartDate).getTime() && !pastPeriodsTemp.find(p => p.startDate === formatISO(startOfDay(parseISO(budget.originalStartDate!))))) {
+                // Add original start if missed
+             } else {
+                break;
+             }
+        }
+         if (prevPeriodStartCandidate.getTime() === currentPeriodStartForPast.getTime() && currentPeriodStartForPast.getTime() !== parseISO(budget.originalStartDate).getTime()) {iterationLimit=0; break;} // Break if stuck
+        currentPeriodStartForPast = prevPeriodStartCandidate;
+         if (isBefore(currentPeriodStartForPast, subYears(today, 5))) { iterationLimit = 0; break; } // safety for runaway loop backward
+
+    }
+    // Add the original start date period if it wasn't captured and is distinct
+     const originalStartDatePeriodExists = pastPeriodsTemp.some(p => parseISO(p.startDate).getTime() === parseISO(budget.originalStartDate!).getTime());
+    if (!originalStartDatePeriodExists) {
+        const {end: origEnd, nameFmt: origNameFmt} = getPeriodDetails(parseISO(budget.originalStartDate!), budget.recurrenceFrequency);
+        pastPeriodsTemp.push({
+            name: format(parseISO(budget.originalStartDate!), origNameFmt),
+            startDate: formatISO(startOfDay(parseISO(budget.originalStartDate!))),
+            endDate: formatISO(endOfDay(origEnd))
+        });
+    }
+
+    periods.push(...pastPeriodsTemp.reverse()); // Reverse to get chronological order
+
+    // Generate future periods starting from the period after seedPeriodStart
+    let currentPeriodStartForFuture = advanceDate(seedPeriodStart, budget.recurrenceFrequency);
+    // Ensure we don't add seedPeriodStart again if it was already added
+    if (periods.length > 0 && parseISO(periods[periods.length-1].startDate).getTime() >= currentPeriodStartForFuture.getTime()){
+         currentPeriodStartForFuture = advanceDate(parseISO(periods[periods.length-1].startDate), budget.recurrenceFrequency);
+    }
+
+
+    for (let i = 0; i < numFuture && iterationLimit-- > 0; i++) {
+        const { end: periodEnd, nameFmt: periodNameFmt } = getPeriodDetails(currentPeriodStartForFuture, budget.recurrenceFrequency);
+        
         periods.push({
-            name: format(currentPeriodStart, periodNameFmt),
-            startDate: formatISO(startOfDay(currentPeriodStart)),
+            name: format(currentPeriodStartForFuture, periodNameFmt),
+            startDate: formatISO(startOfDay(currentPeriodStartForFuture)),
             endDate: formatISO(endOfDay(periodEnd))
         });
-
-        switch (budget.recurrenceFrequency) {
-            case 'weekly': currentPeriodStart = addWeeks(currentPeriodStart, 1); break;
-            case 'biweekly': currentPeriodStart = addWeeks(currentPeriodStart, 2); break;
-            case 'monthly': currentPeriodStart = addMonths(currentPeriodStart, 1); currentPeriodStart = startOfMonth(currentPeriodStart); break;
-            case 'quarterly': currentPeriodStart = addMonths(currentPeriodStart, 3); currentPeriodStart = startOfQuarter(currentPeriodStart); break;
-            case 'annually': currentPeriodStart = addYears(currentPeriodStart, 1); currentPeriodStart = startOfYear(currentPeriodStart); break;
+        
+        const nextFutureStart = advanceDate(currentPeriodStartForFuture, budget.recurrenceFrequency);
+        if (isBefore(nextFutureStart, currentPeriodStartForFuture) || nextFutureStart.getTime() === currentPeriodStartForFuture.getTime()) { // Break if no progress
+            iterationLimit = 0; break;
         }
+        currentPeriodStartForFuture = nextFutureStart;
+        if (isAfter(currentPeriodStartForFuture, addYears(today, 5))) { iterationLimit = 0; break; } // safety for runaway loop forward
     }
     
     // Ensure unique periods and sort them
-    const uniquePeriods = Array.from(new Set(periods.map(p => p.startDate)))
-      .map(date => periods.find(p => p.startDate === date)!)
+    const uniquePeriodsMap = new Map<string, { name: string; startDate: string; endDate: string }>();
+    periods.forEach(p => uniquePeriodsMap.set(p.startDate, p));
+    const uniquePeriods = Array.from(uniquePeriodsMap.values())
       .sort((a,b) => parseISO(a.startDate).getTime() - parseISO(b.startDate).getTime());
+      
+    // Ensure we have a period containing today if possible or the latest past/earliest future
+    const todayIso = formatISO(startOfDay(today));
+    const hasCurrentOrFutureRelevant = uniquePeriods.some(p => isWithinInterval(parseISO(todayIso), {start: parseISO(p.startDate), end: parseISO(p.endDate)}) || isAfter(parseISO(p.startDate), parseISO(todayIso)) );
+    const hasPastRelevant = uniquePeriods.some(p => isBefore(parseISO(p.endDate), parseISO(todayIso)));
 
+    if(!hasCurrentOrFutureRelevant && !hasPastRelevant && budget.originalStartDate){ // If no periods generated and there's an original start date.
+        const {end: origEnd, nameFmt: origNameFmt} = getPeriodDetails(parseISO(budget.originalStartDate), budget.recurrenceFrequency);
+        return [{
+            name: format(parseISO(budget.originalStartDate), origNameFmt),
+            startDate: formatISO(startOfDay(parseISO(budget.originalStartDate))),
+            endDate: formatISO(endOfDay(origEnd))
+        }];
+    }
+    
     return uniquePeriods;
 
   }, []);
@@ -439,16 +488,16 @@ export default function BudgetsPage() {
       if (budget) {
         const periods = generateBudgetPeriods(budget);
         setCurrentBudgetPeriods(periods);
-        // Auto-select the current period or the latest past period if no current
-        const todayIso = formatISO(today);
-        let periodToView = periods.find(p => todayIso >= p.startDate && todayIso <= p.endDate);
+        
+        const todayInstance = new Date();
+        let periodToView = periods.find(p => isWithinInterval(todayInstance, {start: parseISO(p.startDate), end: parseISO(p.endDate)}));
+        
         if (!periodToView && periods.length > 0) {
-            // find the latest period that has already started or is current
-            const pastOrCurrentPeriods = periods.filter(p => parseISO(p.startDate) <= today);
+            const pastOrCurrentPeriods = periods.filter(p => parseISO(p.startDate) <= todayInstance);
             if(pastOrCurrentPeriods.length > 0){
-                periodToView = pastOrCurrentPeriods[pastOrCurrentPeriods.length -1];
-            } else { // if all periods are in future, take the first one
-                periodToView = periods[0];
+                periodToView = pastOrCurrentPeriods[pastOrCurrentPeriods.length -1]; // latest past or current
+            } else { 
+                periodToView = periods[0]; // earliest future
             }
         }
 
@@ -462,7 +511,7 @@ export default function BudgetsPage() {
             limit: budget.limit,
           });
         } else {
-          setViewedPeriod(null);
+          setViewedPeriod(null); // No suitable period found (e.g. budget starts far in future)
         }
       } else {
         setCurrentBudgetPeriods([]);
@@ -485,13 +534,17 @@ export default function BudgetsPage() {
         originalStartDate: data.isRecurring ? formatISO(startOfDay(parseISO(data.startDate))) : null,
     };
 
-    const periodStartDate = formatISO(startOfDay(parseISO(data.startDate)));
-    const periodEndDate = formatISO(endOfDay(parseISO(data.endDate)));
+    // For non-recurring, startDate and endDate are directly from form.
+    // For recurring, form's startDate is originalStartDate. form's endDate helps define the *first* period's length.
+    // The actual startDate/endDate for display will be derived from generateBudgetPeriods.
+    // So, for the 'Budget' object, we can store the form's startDate/endDate as the initial period.
+    const initialPeriodStartDate = formatISO(startOfDay(parseISO(data.startDate)));
+    const initialPeriodEndDate = formatISO(endOfDay(parseISO(data.endDate)));
     
     const budgetWithPeriod: Omit<Budget, 'id' | 'spent'> = {
         ...baseBudgetProperties,
-        startDate: periodStartDate,
-        endDate: periodEndDate,
+        startDate: initialPeriodStartDate, 
+        endDate: initialPeriodEndDate,
     };
 
 
@@ -499,7 +552,7 @@ export default function BudgetsPage() {
       setBudgets(prev => prev.map(b => b.id === id ? { 
         ...b, 
         ...budgetWithPeriod,
-        spent: calculateSpentForPeriod(budgetWithPeriod.category, budgetWithPeriod.startDate, budgetWithPeriod.endDate, allTransactions)
+        // Spent is dynamic, so no need to set it here; it's calculated on view.
        } : b));
       toast({ title: "Budget Updated", description: `${data.name} has been updated.`});
     } else { // Creating new budget
@@ -507,7 +560,7 @@ export default function BudgetsPage() {
       const newBudget: Budget = {
         id: newBudgetId,
         ...budgetWithPeriod,
-        spent: calculateSpentForPeriod(budgetWithPeriod.category, budgetWithPeriod.startDate, budgetWithPeriod.endDate, allTransactions),
+        spent: 0, // Initial spent is 0, will be calculated on view.
       };
       setBudgets(prev => [newBudget, ...prev]);
       toast({ title: "Budget Created", description: `${data.name} has been created.`});
@@ -712,3 +765,8 @@ const GlobalProgressStyle = () => (
     }
   `}</style>
 );
+const subYears = (date: Date, years: number): Date => {
+  const newDate = new Date(date);
+  newDate.setFullYear(newDate.getFullYear() - years);
+  return newDate;
+};
