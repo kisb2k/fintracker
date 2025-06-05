@@ -104,12 +104,18 @@ const SpendingChart: React.FC<{
           cx="50%"
           cy="50%"
           labelLine={false}
-          outerRadius={100}
+          outerRadius={80} // Reduced from 100
           fill="#8884d8"
           dataKey="Spending"
           nameKey="name"
+          isAnimationActive={false} // Temporarily disable animation for debugging/stability
           label={({ name, percent, Spending }) => {
-            if (Spending === 0 && data.reduce((sum, entry) => sum + entry.Spending, 0) === 0) return name; 
+            // If total spending is 0, just show category names
+            if (data.reduce((sum, entry) => sum + entry.Spending, 0) === 0) {
+                return name;
+            }
+            // Hide label for very small percentages to avoid clutter
+            if (percent * 100 < 1) return null; 
             return `${name} ${(percent * 100).toFixed(0)}%`;
           }}
           onClick={(payload) => {
@@ -460,7 +466,7 @@ export default function DashboardPage() {
 
       if (periods.length > 0) {
         
-        if (initialPeriodSetForBudgetIdRef.current !== defaultBudget.id || !selectedDashboardPeriod) {
+        if (initialPeriodSetForBudgetIdRef.current !== defaultBudget.id || !selectedDashboardPeriod || !periods.find(p => p.startDate === selectedDashboardPeriod.startDate)) {
           const todayInstance = new Date();
           let periodToView = periods.find(p =>
             isValid(parseISO(p.startDate)) &&
@@ -492,7 +498,7 @@ export default function DashboardPage() {
       setSpendingChartData([]); // Clear chart data if no default budget
       initialPeriodSetForBudgetIdRef.current = null;
     }
-  }, [defaultBudget]); 
+  }, [defaultBudget, selectedDashboardPeriod]); // Added selectedDashboardPeriod to ensure re-check if it gets out of sync
 
 
   const transactionsInSelectedPeriod = useMemo(() => {
@@ -666,7 +672,7 @@ export default function DashboardPage() {
             {defaultBudget && selectedDashboardPeriod && displayPeriodStart && displayPeriodEnd && (
               <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
                 <CalendarDays className="h-3 w-3"/>
-                {format(displayPeriodStart, 'MMM dd, yyyy')} - {format(displayPeriodEnd, 'MMM dd, yyyy')}
+                {isValid(displayPeriodStart) ? format(displayPeriodStart, 'MMM dd, yyyy') : 'N/A'} - {isValid(displayPeriodEnd) ? format(displayPeriodEnd, 'MMM dd, yyyy') : 'N/A'}
               </p>
             )}
           </CardHeader>
