@@ -1,4 +1,3 @@
-
 export type Account = {
   id: string;
   name: string;
@@ -6,6 +5,7 @@ export type Account = {
   balance: number;
   type: 'checking' | 'savings' | 'credit card' | 'cash' | 'crypto' | 'other' | 'investment' | 'loan';
   lastFour?: string | null; // Allow null for optional lastFour
+  isDefault?: boolean; // New field for default account
 };
 
 export type Transaction = {
@@ -77,6 +77,7 @@ export type AccountFormData = {
   bankName: string;
   type: Account['type'];
   lastFour?: string | null;
+  isDefault?: boolean;
 };
 
 // For Dashboard Spending Chart
@@ -93,4 +94,11 @@ export interface CategoryTransactionDetails {
   totalSpent: number;
   limit?: number;
 }
+
+export type Category = {
+  id: string;
+  name: string;
+  color?: string;
+  isDefault?: boolean;
+};
 

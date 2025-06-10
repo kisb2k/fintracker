@@ -1,95 +1,97 @@
-
 'use server';
-import { open, type Database } from 'sqlite';
-import sqlite3 from 'sqlite3';
-import path from 'path';
-import fs from 'fs';
+import { initializeDuckDB, getDuckDB } from './duckdb-init';
 
-let db: Database | null = null;
+interface TableColumn {
+  column_name: string;
+  column_type: string;
+}
 
-const DB_FILE_PATH = path.join(process.cwd(), 'db', 'fintrack.db');
-const DB_DIR_PATH = path.join(process.cwd(), 'db');
-
-async function addColumnIfNotExists(dbInstance: Database, tableName: string, columnName: string, columnDefinition: string): Promise<void> {
-  const tableInfo = await dbInstance.all(`PRAGMA table_info(${tableName})`);
-  if (!tableInfo.some(col => col.name === columnName)) {
-    try {
-      await dbInstance.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
+async function addColumnIfNotExists(dbInstance: any, tableName: string, columnName: string, columnDefinition: string): Promise<void> {
+  try {
+    const result = await dbInstance.all(`DESCRIBE ${tableName}`);
+    const tableInfo = result as unknown as TableColumn[];
+    if (!tableInfo.some((col) => col.column_name === columnName)) {
+      await dbInstance.run(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnDefinition}`);
       console.log(`Added column ${columnName} to ${tableName} table.`);
-    } catch (error) {
-      console.error(`Failed to add column ${columnName} to ${tableName}:`, error);
     }
+  } catch (error) {
+    console.error(`Failed to add column ${columnName} to ${tableName}:`, error);
   }
 }
 
-async function initializeDatabaseSchema(dbInstance: Database): Promise<void> {
-  await dbInstance.exec(`
+async function initializeDatabaseSchema(dbInstance: any): Promise<void> {
+  await dbInstance.run(`
     CREATE TABLE IF NOT EXISTS accounts (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE, -- Ensure account names are unique
-      bankName TEXT,
-      balance REAL DEFAULT 0,
-      type TEXT CHECK(type IN ('checking', 'savings', 'credit card', 'cash', 'crypto', 'other', 'investment', 'loan')) DEFAULT 'checking',
-      lastFour TEXT
+      id VARCHAR PRIMARY KEY,
+      name VARCHAR NOT NULL UNIQUE,
+      bankName VARCHAR,
+      balance DOUBLE DEFAULT 0,
+      type VARCHAR CHECK(type IN ('checking', 'savings', 'credit card', 'cash', 'crypto', 'other', 'investment', 'loan')) DEFAULT 'checking',
+      lastFour VARCHAR,
+      isDefault BOOLEAN DEFAULT FALSE
     );
 
     CREATE TABLE IF NOT EXISTS transactions (
-      id TEXT PRIMARY KEY,
-      accountId TEXT NOT NULL,
-      date TEXT NOT NULL, -- ISO 8601 string
-      description TEXT NOT NULL,
-      amount REAL NOT NULL, -- positive for income, negative for expense
-      category TEXT,
-      status TEXT CHECK(status IN ('pending', 'posted')) DEFAULT 'posted',
-      FOREIGN KEY (accountId) REFERENCES accounts(id) ON DELETE RESTRICT -- Prevent account deletion if transactions exist
+      id VARCHAR PRIMARY KEY,
+      accountId VARCHAR NOT NULL,
+      date VARCHAR NOT NULL,
+      description VARCHAR NOT NULL,
+      amount DOUBLE NOT NULL,
+      category VARCHAR,
+      status VARCHAR CHECK(status IN ('pending', 'posted')) DEFAULT 'posted',
+      loadTimestamp VARCHAR,
+      sourceFileName VARCHAR,
+      FOREIGN KEY (accountId) REFERENCES accounts(id) ON DELETE RESTRICT
     );
 
     CREATE TABLE IF NOT EXISTS budgets (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE,
+      id VARCHAR PRIMARY KEY,
+      name VARCHAR NOT NULL UNIQUE,
       isRecurring BOOLEAN DEFAULT FALSE,
-      recurrenceFrequency TEXT, 
-      originalStartDate TEXT,
-      formDefinedEndDate TEXT, -- ISO string, only for non-recurring budgets
-      isDefault BOOLEAN DEFAULT 0 -- New column for default budget
+      recurrenceFrequency VARCHAR,
+      originalStartDate VARCHAR,
+      formDefinedEndDate VARCHAR,
+      isDefault BOOLEAN DEFAULT FALSE
     );
 
     CREATE TABLE IF NOT EXISTS budget_category_limits (
-      id TEXT PRIMARY KEY,
-      budget_id TEXT NOT NULL,
-      category_name TEXT NOT NULL,
-      limit_amount REAL NOT NULL,
+      id VARCHAR PRIMARY KEY,
+      budget_id VARCHAR NOT NULL,
+      category_name VARCHAR NOT NULL,
+      limit_amount DOUBLE NOT NULL,
       FOREIGN KEY (budget_id) REFERENCES budgets(id) ON DELETE CASCADE,
       UNIQUE (budget_id, category_name)
     );
+
+    CREATE TABLE IF NOT EXISTS categories (
+      id VARCHAR PRIMARY KEY,
+      name VARCHAR NOT NULL UNIQUE,
+      color VARCHAR DEFAULT '#8884d8',
+      isDefault BOOLEAN DEFAULT FALSE
+    );
   `);
 
-  await addColumnIfNotExists(dbInstance, 'transactions', 'loadTimestamp', 'TEXT');
-  await addColumnIfNotExists(dbInstance, 'transactions', 'sourceFileName', 'TEXT');
-  await addColumnIfNotExists(dbInstance, 'budgets', 'formDefinedEndDate', 'TEXT');
-  await addColumnIfNotExists(dbInstance, 'budgets', 'isDefault', 'BOOLEAN DEFAULT 0');
-
-
-  // Ensure foreign key constraints are enabled
-  await dbInstance.exec('PRAGMA foreign_keys = ON;');
+  await addColumnIfNotExists(dbInstance, 'transactions', 'loadTimestamp', 'VARCHAR');
+  await addColumnIfNotExists(dbInstance, 'transactions', 'sourceFileName', 'VARCHAR');
+  await addColumnIfNotExists(dbInstance, 'budgets', 'formDefinedEndDate', 'VARCHAR');
+  await addColumnIfNotExists(dbInstance, 'budgets', 'isDefault', 'BOOLEAN DEFAULT FALSE');
+  await addColumnIfNotExists(dbInstance, 'accounts', 'isDefault', 'BOOLEAN DEFAULT FALSE');
 
   console.log('Database schema initialized/updated.');
 }
 
-export async function getDb(): Promise<Database> {
-  if (!db) {
-    if (!fs.existsSync(DB_DIR_PATH)) {
-      fs.mkdirSync(DB_DIR_PATH, { recursive: true });
-    }
-
-    const newDbInstance = await open({
-      filename: DB_FILE_PATH,
-      driver: sqlite3.Database,
-    });
-    await initializeDatabaseSchema(newDbInstance);
-    db = newDbInstance;
-    console.log('Database connection established and schema checked/updated.');
+export async function getDb(): Promise<any> {
+  if (typeof window !== 'undefined') {
+    throw new Error('Database operations are only available on the server side');
   }
-  return db;
+
+  try {
+    const db = await initializeDuckDB();
+    await initializeDatabaseSchema(db);
+    return db;
+  } catch (error) {
+    console.error('Failed to get database:', error);
+    throw error;
+  }
 }
 

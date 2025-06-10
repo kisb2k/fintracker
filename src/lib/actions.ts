@@ -1,10 +1,9 @@
-
 'use server';
 
-import type { Account, Transaction, AccountFormData, Budget, BudgetCategoryLimit, BudgetUpsertData } from '@/lib/types';
+import type { Account, Transaction, AccountFormData, Budget, BudgetCategoryLimit, BudgetUpsertData, Category } from '@/lib/types';
 import { getDb } from '@/lib/db';
 import crypto from 'crypto';
-import { formatISO, parseISO, endOfMonth, endOfWeek, endOfQuarter, endOfYear, addWeeks, addMonths, addYears, startOfDay } from 'date-fns';
+import { formatISO, parseISO, endOfMonth, endOfWeek, endOfQuarter, endOfYear, addWeeks, addMonths, addYears, startOfDay, endOfDay } from 'date-fns';
 
 
 // --- Account Actions ---
@@ -12,7 +11,7 @@ import { formatISO, parseISO, endOfMonth, endOfWeek, endOfQuarter, endOfYear, ad
 export async function getAccounts(): Promise<Account[]> {
   const db = await getDb();
   try {
-    const accounts = await db.all<Account[]>('SELECT * FROM accounts ORDER BY name ASC');
+    const accounts = await db.all('SELECT * FROM accounts ORDER BY name ASC');
     return accounts || [];
   } catch (error) {
     console.error('Failed to fetch accounts:', error);
@@ -24,7 +23,7 @@ export async function addAccount(accountData: AccountFormData): Promise<{ accoun
   const db = await getDb();
   const id = crypto.randomUUID();
   try {
-    const existingAccountWithName = await db.get<Account>('SELECT id FROM accounts WHERE LOWER(name) = LOWER(?)', accountData.name);
+    const existingAccountWithName = await db.get('SELECT id FROM accounts WHERE LOWER(name) = LOWER(?)', accountData.name);
     if (existingAccountWithName) {
         return { account: null, error: `An account with the name "${accountData.name}" already exists.` };
     }
@@ -38,7 +37,10 @@ export async function addAccount(accountData: AccountFormData): Promise<{ accoun
       accountData.type,
       accountData.lastFour || null
     );
-    const newAccount = await db.get<Account>('SELECT * FROM accounts WHERE id = ?', id);
+    const newAccount = await db.get('SELECT * FROM accounts WHERE id = ?', id);
+    if (accountData.isDefault) {
+      await setAsDefaultAccount(id);
+    }
     return { account: newAccount || null };
   } catch (error: any) {
     console.error('Failed to add account:', error);
@@ -52,9 +54,9 @@ export async function addAccount(accountData: AccountFormData): Promise<{ accoun
 export async function updateAccountDetails(accountId: string, data: AccountFormData): Promise<{ success: boolean; error?: string; account?: Account | null }> {
   const db = await getDb();
   try {
-    const currentAccount = await db.get<Account>('SELECT name FROM accounts WHERE id = ?', accountId);
+    const currentAccount = await db.get('SELECT name FROM accounts WHERE id = ?', accountId);
     if (data.name !== currentAccount?.name) {
-        const existingAccountWithName = await db.get<Account>('SELECT id FROM accounts WHERE LOWER(name) = LOWER(?) AND id != ?', data.name, accountId);
+        const existingAccountWithName = await db.get('SELECT id FROM accounts WHERE LOWER(name) = LOWER(?) AND id != ?', data.name, accountId);
         if (existingAccountWithName) {
             return { success: false, error: `An account with the name "${data.name}" already exists.` };
         }
@@ -68,7 +70,10 @@ export async function updateAccountDetails(accountId: string, data: AccountFormD
       data.lastFour || null,
       accountId
     );
-    const updatedAccount = await db.get<Account>('SELECT * FROM accounts WHERE id = ?', accountId);
+    const updatedAccount = await db.get('SELECT * FROM accounts WHERE id = ?', accountId);
+    if (data.isDefault) {
+      await setAsDefaultAccount(accountId);
+    }
     return { success: true, account: updatedAccount };
   } catch (error: any) {
     console.error(`Failed to update account ${accountId}:`, error);
@@ -82,7 +87,7 @@ export async function updateAccountDetails(accountId: string, data: AccountFormD
 export async function deleteAccount(accountId: string): Promise<{ success: boolean; error?: string }> {
   const db = await getDb();
   try {
-    const transactionCount = await db.get<{ count: number }>(
+    const transactionCount = await db.get(
       'SELECT COUNT(*) as count FROM transactions WHERE accountId = ?',
       accountId
     );
@@ -109,7 +114,7 @@ export async function deleteAccount(accountId: string): Promise<{ success: boole
 export async function getAccountById(accountId: string): Promise<Account | null> {
   const db = await getDb();
   try {
-    const account = await db.get<Account>('SELECT * FROM accounts WHERE id = ?', accountId);
+    const account = await db.get('SELECT * FROM accounts WHERE id = ?', accountId);
     return account || null;
   } catch (error) {
     console.error(`Failed to fetch account ${accountId}:`, error);
@@ -215,10 +220,7 @@ export async function addTransactionsBatch(
 export async function getTransactionsByAccountId(accountId: string): Promise<Transaction[]> {
   const db = await getDb();
   try {
-    const transactions = await db.all<Transaction[]>(
-      'SELECT * FROM transactions WHERE accountId = ? ORDER BY date DESC, id DESC',
-      accountId
-    );
+    const transactions = await db.all('SELECT * FROM transactions WHERE accountId = ? ORDER BY date DESC, id DESC', accountId);
     return transactions || [];
   } catch (error) {
     console.error(`Failed to fetch transactions for account ${accountId}:`, error);
@@ -238,10 +240,7 @@ export async function updateAccountBalance(accountId: string, newBalance: number
 export async function recalculateAndUpdateAccountBalance(accountId: string): Promise<void> {
   const db = await getDb();
   try {
-    const result = await db.get<{ total: number }>(
-      'SELECT SUM(amount) as total FROM transactions WHERE accountId = ?',
-      accountId
-    );
+    const result = await db.get('SELECT SUM(amount) as total FROM transactions WHERE accountId = ?', accountId);
     const newBalance = result?.total || 0;
     await updateAccountBalance(accountId, newBalance);
     console.log(`Balance for account ${accountId} updated to ${newBalance.toFixed(2)}`);
@@ -253,9 +252,9 @@ export async function recalculateAndUpdateAccountBalance(accountId: string): Pro
 export async function recalculateAllAccountBalances(): Promise<void> {
   const db = await getDb();
   try {
-    const accounts = await db.all<{ id: string }[]>('SELECT id FROM accounts');
+    const accounts = await db.all('SELECT id FROM accounts');
     if (accounts) {
-      for (const acc of accounts) {
+      for (const acc of accounts as { id: string }[]) {
         await recalculateAndUpdateAccountBalance(acc.id);
       }
       console.log('All account balances recalculated and updated.');
@@ -269,7 +268,7 @@ export async function recalculateAllAccountBalances(): Promise<void> {
 export async function removeDuplicateTransactions(): Promise<{ success: boolean; duplicatesRemoved?: number; error?: string }> {
   const db = await getDb();
   try {
-    const rowsToDelete = await db.all<{ id: string }>(`
+    const rowsToDelete = await db.all(`
       SELECT id
       FROM transactions
       WHERE id NOT IN (
@@ -283,7 +282,7 @@ export async function removeDuplicateTransactions(): Promise<{ success: boolean;
       return { success: true, duplicatesRemoved: 0 };
     }
 
-    const idsToDeleteList = rowsToDelete.map(r => `'${r.id}'`).join(',');
+    const idsToDeleteList = rowsToDelete.map((r: { id: string }) => `'${r.id}'`).join(',');
     const deleteResult = await db.run(`DELETE FROM transactions WHERE id IN (${idsToDeleteList})`);
 
     const numRemoved = deleteResult.changes || 0;
@@ -300,7 +299,7 @@ export async function removeDuplicateTransactions(): Promise<{ success: boolean;
 export async function deleteTransaction(transactionId: string): Promise<{ success: boolean; error?: string }> {
   const db = await getDb();
   try {
-    const transaction = await db.get<Transaction>('SELECT accountId FROM transactions WHERE id = ?', transactionId);
+    const transaction = await db.get('SELECT accountId FROM transactions WHERE id = ?', transactionId);
     if (!transaction) {
       return { success: false, error: 'Transaction not found' };
     }
@@ -324,8 +323,8 @@ export async function deleteTransactionsBatch(transactionIds: string[]): Promise
   const db = await getDb();
   try {
     const placeholders = transactionIds.map(() => '?').join(',');
-    const transactionsBeingDeleted = await db.all<{ accountId: string }>(`SELECT DISTINCT accountId FROM transactions WHERE id IN (${placeholders})`, ...transactionIds);
-    const affectedAccountIds = new Set(transactionsBeingDeleted.map(t => t.accountId));
+    const transactionsBeingDeleted = await db.all(`SELECT DISTINCT accountId FROM transactions WHERE id IN (${placeholders})`, ...transactionIds);
+    const affectedAccountIds = new Set((transactionsBeingDeleted as { accountId: string }[]).map((t: { accountId: string }) => t.accountId));
 
     const result = await db.run(`DELETE FROM transactions WHERE id IN (${placeholders})`, ...transactionIds);
 
@@ -682,6 +681,101 @@ export async function setAsDefaultBudget(budgetId: string): Promise<{ success: b
     await db.exec('ROLLBACK');
     console.error(`Failed to set budget ${budgetId} as default:`, error);
     return { success: false, error: error.message || 'Failed to set default budget.' };
+  }
+}
+
+export async function setAsDefaultAccount(accountId: string): Promise<{ success: boolean; error?: string }> {
+  const db = await getDb();
+  try {
+    await db.run('UPDATE accounts SET isDefault = FALSE WHERE isDefault = TRUE');
+    await db.run('UPDATE accounts SET isDefault = TRUE WHERE id = ?', accountId);
+    return { success: true };
+  } catch (error: any) {
+    console.error('Failed to set default account:', error);
+    return { success: false, error: error.message || 'Failed to set default account.' };
+  }
+}
+
+// --- Category Actions ---
+
+export async function getCategories(): Promise<Category[]> {
+  const db = await getDb();
+  try {
+    const categories = await db.all('SELECT * FROM categories ORDER BY name ASC');
+    return categories || [];
+  } catch (error) {
+    console.error('Failed to fetch categories:', error);
+    return [];
+  }
+}
+
+export async function addCategory(categoryData: { name: string; color?: string; isDefault?: boolean }): Promise<{ category: Category | null; error?: string }> {
+  const db = await getDb();
+  const id = crypto.randomUUID();
+  try {
+    const existingCategory = await db.get('SELECT id FROM categories WHERE LOWER(name) = LOWER(?)', categoryData.name);
+    if (existingCategory) {
+      return { category: null, error: `A category with the name "${categoryData.name}" already exists.` };
+    }
+    if (categoryData.isDefault) {
+      await db.run('UPDATE categories SET isDefault = FALSE WHERE isDefault = TRUE');
+    }
+    await db.run(
+      'INSERT INTO categories (id, name, color, isDefault) VALUES (?, ?, ?, ?)',
+      id,
+      categoryData.name,
+      categoryData.color || '#8884d8',
+      categoryData.isDefault ? 1 : 0
+    );
+    const newCategory = await db.get('SELECT * FROM categories WHERE id = ?', id);
+    return { category: newCategory || null };
+  } catch (error: any) {
+    console.error('Failed to add category:', error);
+    return { category: null, error: error.message || 'Failed to add category.' };
+  }
+}
+
+export async function updateCategory(categoryId: string, data: { name?: string; color?: string; isDefault?: boolean }): Promise<{ success: boolean; error?: string; category?: Category | null }> {
+  const db = await getDb();
+  try {
+    if (data.isDefault) {
+      await db.run('UPDATE categories SET isDefault = FALSE WHERE isDefault = TRUE');
+    }
+    await db.run(
+      'UPDATE categories SET name = COALESCE(?, name), color = COALESCE(?, color), isDefault = COALESCE(?, isDefault) WHERE id = ?',
+      data.name,
+      data.color,
+      data.isDefault !== undefined ? (data.isDefault ? 1 : 0) : undefined,
+      categoryId
+    );
+    const updatedCategory = await db.get('SELECT * FROM categories WHERE id = ?', categoryId);
+    return { success: true, category: updatedCategory };
+  } catch (error: any) {
+    console.error(`Failed to update category ${categoryId}:`, error);
+    return { success: false, error: error.message || 'Failed to update category.' };
+  }
+}
+
+export async function deleteCategory(categoryId: string): Promise<{ success: boolean; error?: string }> {
+  const db = await getDb();
+  try {
+    await db.run('DELETE FROM categories WHERE id = ?', categoryId);
+    return { success: true };
+  } catch (error: any) {
+    console.error(`Failed to delete category ${categoryId}:`, error);
+    return { success: false, error: error.message || 'Failed to delete category.' };
+  }
+}
+
+export async function setDefaultCategory(categoryId: string): Promise<{ success: boolean; error?: string }> {
+  const db = await getDb();
+  try {
+    await db.run('UPDATE categories SET isDefault = FALSE WHERE isDefault = TRUE');
+    await db.run('UPDATE categories SET isDefault = TRUE WHERE id = ?', categoryId);
+    return { success: true };
+  } catch (error: any) {
+    console.error('Failed to set default category:', error);
+    return { success: false, error: error.message || 'Failed to set default category.' };
   }
 }
 

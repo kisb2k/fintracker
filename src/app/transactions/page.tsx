@@ -1,4 +1,3 @@
-
 "use client";
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
@@ -81,6 +80,16 @@ import {
   deleteTransactionsBatch as deleteTransactionsBatchAction,
   updateMultipleTransactionFields,
 } from '@/lib/actions';
+import * as XLSX from 'xlsx';
+import { CategoryManagerModal } from '@/components/CategoryManagerModal';
+import { getCategories, addCategory, updateCategory, deleteCategory } from '@/lib/actions/categories';
+
+interface Category {
+  id: string;
+  name: string;
+  color: string;
+  isDefault: boolean;
+}
 
 const transactionFormSchema = z.object({
   description: z.string().min(1, "Description is required"),
@@ -100,7 +109,8 @@ const AddTransactionFormDialog: React.FC<{
   onOpenChange: (open: boolean) => void;
   onTransactionAdded: () => void;
   accounts: Account[];
-}> = ({ isOpen, onOpenChange, onTransactionAdded, accounts }) => {
+  categories: Category[];
+}> = ({ isOpen, onOpenChange, onTransactionAdded, accounts, categories }) => {
   const { toast } = useToast();
   const form = useForm<TransactionFormData>({
     resolver: zodResolver(transactionFormSchema),
@@ -218,7 +228,17 @@ const AddTransactionFormDialog: React.FC<{
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl><SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger></FormControl>
                       <SelectContent>
-                        {allCategories.map(cat => <SelectItem key={cat} value={cat}>{cat}</SelectItem>)}
+                        {categories.map(cat => (
+                          <SelectItem key={cat.id} value={cat.name}>
+                            <div className="flex items-center gap-2">
+                              <div
+                                className="w-3 h-3 rounded-full"
+                                style={{ backgroundColor: cat.color }}
+                              />
+                              {cat.name}
+                            </div>
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -389,81 +409,116 @@ const FileUploadDialog: React.FC<{
     const file = event.target.files?.[0];
     if (!file) return;
     if (!selectedAccountId) {
-      toast({ title: "Account Required", description: "Please select an account for this CSV upload.", variant: "destructive" });
+      toast({ title: "Account Required", description: "Please select an account for this upload.", variant: "destructive" });
       return;
     }
-
     setIsProcessing(true);
-    const reader = new FileReader();
     const fileName = file.name;
+    const fileExt = fileName.split('.').pop()?.toLowerCase();
+    let headerLine = '';
+    let dataLines: string[] = [];
+    let actualHeader: string[] = [];
+    let isXlsx = false;
+    if (fileExt === 'csv') {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const csvText = e.target?.result as string;
+        if (!csvText) {
+          toast({ title: "Error reading file", description: "File content is empty.", variant: "destructive" });
+          setIsProcessing(false);
+          return;
+        }
+        const lines = csvText.split(/\r\n|\n/).filter(line => line.trim() !== '');
+        if (lines.length < 1) {
+          toast({ title: "Invalid CSV", description: "CSV file must have at least a header row.", variant: "destructive" });
+          setIsProcessing(false);
+          return;
+        }
+        headerLine = lines[0];
+        dataLines = lines.slice(1);
+        actualHeader = headerLine.split(',').map(h => h.trim());
+        await processParsedFile(actualHeader, dataLines, fileName, statementType);
+      };
+      reader.onerror = () => {
+        toast({ title: "Error reading file", description: "Could not read file.", variant: "destructive" });
+        setIsProcessing(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      };
+      reader.readAsText(file);
+    } else if (fileExt === 'xlsx') {
+      isXlsx = true;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const json = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1 });
+        if (!json || json.length < 1) {
+          toast({ title: "Invalid XLSX", description: "XLSX file must have at least a header row.", variant: "destructive" });
+          setIsProcessing(false);
+          return;
+        }
+        actualHeader = (json[0] as string[]).map(h => h.trim());
+        dataLines = json.slice(1).map(row => (row as string[]).map(cell => `"${cell ?? ''}"`).join(','));
+        await processParsedFile(actualHeader, dataLines, fileName, statementType);
+      };
+      reader.onerror = () => {
+        toast({ title: "Error reading file", description: "Could not read file.", variant: "destructive" });
+        setIsProcessing(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      toast({ title: "Unsupported File Type", description: "Please upload a CSV or XLSX file.", variant: "destructive" });
+      setIsProcessing(false);
+      return;
+    }
+  };
 
-    reader.onload = async (e) => {
-      const csvText = e.target?.result as string;
-      if (!csvText) {
-        toast({ title: "Error reading file", description: "File content is empty.", variant: "destructive" });
+  const processParsedFile = async (
+    actualHeader: string[],
+    dataLines: string[],
+    fileName: string,
+    statementType: StatementType
+  ) => {
+    try {
+      const mappingResult = await mapCsvHeader({
+        csvHeader: actualHeader.join(','),
+        requiredFields: [...REQUIRED_TRANSACTION_FIELDS],
+      });
+      if (!mappingResult.Date || !mappingResult.Amount || !mappingResult.Description) {
+        toast({ title: "Header Mapping Failed", description: "AI could not map essential fields (Date, Amount, Description). Please check file header.", variant: "destructive" });
         setIsProcessing(false);
         return;
       }
-
-      const lines = csvText.split(/\r\n|\n/).filter(line => line.trim() !== '');
-      if (lines.length < 1) {
-        toast({ title: "Invalid CSV", description: "CSV file must have at least a header row.", variant: "destructive" });
-        setIsProcessing(false);
-        return;
-      }
-
-      const headerLine = lines[0];
-      const dataLines = lines.slice(1);
-
-      try {
-        const mappingResult = await mapCsvHeader({
-          csvHeader: headerLine,
-          requiredFields: [...REQUIRED_TRANSACTION_FIELDS],
-        });
-
-        if (!mappingResult.Date || !mappingResult.Amount || !mappingResult.Description) {
-            toast({ title: "Header Mapping Failed", description: "AI could not map essential fields (Date, Amount, Description). Please check CSV header.", variant: "destructive" });
-            setIsProcessing(false);
-            return;
+      const parsedTransactions = parseCSVContent(
+        actualHeader,
+        dataLines,
+        mappingResult,
+        selectedAccountId,
+        statementType
+      );
+      if (parsedTransactions.length > 0) {
+        const batchResult = await addTransactionsBatch(parsedTransactions, fileName);
+        toast({ title: "File Processed", description: `${batchResult.successCount} of ${parsedTransactions.length} transactions loaded.` });
+        if (batchResult.errors.length > 0) {
+          console.error("Errors during batch transaction add:", batchResult.errors);
+          toast({ title: "Import Issues", description: `${batchResult.errors.length} transactions had issues. Check console.`, variant: "destructive" });
         }
-
-        const parsedTransactions = parseCSVContent(
-          headerLine.split(',').map(h => h.trim()),
-          dataLines,
-          mappingResult,
-          selectedAccountId, 
-          statementType
-        );
-
-
-        if (parsedTransactions.length > 0) {
-          const batchResult = await addTransactionsBatch(parsedTransactions, fileName);
-          toast({ title: "File Processed", description: `${batchResult.successCount} of ${parsedTransactions.length} transactions loaded.` });
-          if (batchResult.errors.length > 0) {
-            console.error("Errors during batch transaction add:", batchResult.errors);
-            toast({ title: "Import Issues", description: `${batchResult.errors.length} transactions had issues. Check console.`, variant: "destructive"});
-          }
-        } else {
-            toast({ title: "No Transactions", description: "No transactions were parsed from the file." });
-        }
-        onDataUploaded();
-        onOpenChange(false);
-
-      } catch (error: any) {
-        console.error("File processing error:", error);
-        toast({ title: "Error Processing File", description: error.message || "Could not process CSV with AI mapping.", variant: "destructive" });
-      } finally {
-        setIsProcessing(false);
-        if (fileInputRef.current) fileInputRef.current.value = "";
-        setSelectedAccountId(existingAccounts.length > 0 ? existingAccounts[0].id : ""); 
+      } else {
+        toast({ title: "No Transactions", description: "No transactions were parsed from the file." });
       }
-    };
-    reader.onerror = () => {
-        toast({ title: "Error reading file", description: "Could not read file.", variant: "destructive"});
-        setIsProcessing(false);
-        if (fileInputRef.current) fileInputRef.current.value = "";
-    };
-    reader.readAsText(file);
+      onDataUploaded();
+      onOpenChange(false);
+    } catch (error: any) {
+      console.error("File processing error:", error);
+      toast({ title: "Error Processing File", description: error.message || "Could not process file with AI mapping.", variant: "destructive" });
+    } finally {
+      setIsProcessing(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      setSelectedAccountId(existingAccounts.length > 0 ? existingAccounts[0].id : "");
+    }
   };
 
   const parseCSVContent = (
@@ -610,7 +665,7 @@ const FileUploadDialog: React.FC<{
               </div>
             </RadioGroup>
           </div>
-          <Input type="file" accept=".csv" onChange={handleFileChange} disabled={isProcessing || existingAccounts.length === 0 || !selectedAccountId} ref={fileInputRef} />
+          <Input type="file" accept=".csv,.xlsx" onChange={handleFileChange} disabled={isProcessing || existingAccounts.length === 0 || !selectedAccountId} ref={fileInputRef} />
           {isProcessing && <p className="text-sm text-muted-foreground mt-2">Processing file with AI...</p>}
           <p className="text-xs text-muted-foreground mt-2">
             The system will attempt to automatically map your CSV columns.
@@ -890,6 +945,8 @@ export default function TransactionsPage() {
   const [isInsightsOpen, setIsInsightsOpen] = useState(false);
   const [isBulkUpdateOpen, setIsBulkUpdateOpen] = useState(false);
   const [transactionToDeleteId, setTransactionToDeleteId] = useState<string | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [isLoadingCategories, setIsLoadingCategories] = useState(true);
 
 
   const fetchData = useCallback(async () => {
@@ -907,6 +964,20 @@ export default function TransactionsPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const loadedCategories = await getCategories();
+        setCategories(loadedCategories);
+        setIsLoadingCategories(false);
+      } catch (error) {
+        console.error('Failed to load categories:', error);
+        setIsLoadingCategories(false);
+      }
+    };
+    loadCategories();
+  }, []);
 
   const selectedTransactionIds = useMemo(() => {
     return Object.keys(rowSelection).filter(key => rowSelection[key]);
@@ -950,6 +1021,35 @@ export default function TransactionsPage() {
     setTransactionToDeleteId(null);
   };
 
+  const handleAddCategory = async (name: string, color: string) => {
+    try {
+      await addCategory(name, color);
+      const updatedCategories = await getCategories();
+      setCategories(updatedCategories);
+    } catch (error) {
+      console.error('Failed to add category:', error);
+    }
+  };
+
+  const handleUpdateCategory = async (id: string, name: string, color: string) => {
+    try {
+      await updateCategory(id, name, color);
+      const updatedCategories = await getCategories();
+      setCategories(updatedCategories);
+    } catch (error) {
+      console.error('Failed to update category:', error);
+    }
+  };
+
+  const handleDeleteCategory = async (id: string) => {
+    try {
+      await deleteCategory(id);
+      const updatedCategories = await getCategories();
+      setCategories(updatedCategories);
+    } catch (error) {
+      console.error('Failed to delete category:', error);
+    }
+  };
 
   const columns: ColumnDef<Transaction>[] = useMemo(() => [
     {
@@ -1121,6 +1221,7 @@ export default function TransactionsPage() {
         onOpenChange={setIsAddTransactionOpen}
         onTransactionAdded={fetchData}
         accounts={accounts}
+        categories={categories}
       />
       <FileUploadDialog
         isOpen={isUploadOpen}
@@ -1169,6 +1270,12 @@ export default function TransactionsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <CategoryManagerModal
+        categories={categories}
+        onAddCategory={handleAddCategory}
+        onUpdateCategory={handleUpdateCategory}
+        onDeleteCategory={handleDeleteCategory}
+      />
 
       <Card>
         <CardHeader>
